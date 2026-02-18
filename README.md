@@ -1,6 +1,6 @@
 # Hawkeye CLI
 
-Command-line client for the **Neubird Hawkeye AI SRE** platform. Run AI-powered incident investigations, stream chain-of-thought reasoning, and review session results — all from your terminal.
+Command-line client for the [Neubird Hawkeye](https://neubird.com) AI SRE platform. Run AI-powered incident investigations, stream chain-of-thought reasoning, and review session results — all from your terminal.
 
 ## Quick Start
 
@@ -8,13 +8,11 @@ Command-line client for the **Neubird Hawkeye AI SRE** platform. Run AI-powered 
 # Build
 go build -o hawkeye .
 
-# Configure
-./hawkeye set server http://your-hawkeye-server:8080
-./hawkeye set project <your-project-uuid>
+# Login (fetches token + org automatically)
+./hawkeye login http://your-hawkeye-server:8080 -u you@company.com -p 'your-password'
 
-# Optional
-./hawkeye set token <your-jwt-token>
-./hawkeye set org <your-org-uuid>
+# Set project
+./hawkeye set project <your-project-uuid>
 
 # Investigate
 ./hawkeye investigate "Why is the API returning 500 errors?"
@@ -25,7 +23,7 @@ go build -o hawkeye .
 ### From Source
 
 ```bash
-git clone https://github.com/neubird/hawkeye-cli.git
+git clone https://github.com/neubirdai/hawkeye-cli.git
 cd hawkeye-cli
 go build -o hawkeye .
 
@@ -33,19 +31,30 @@ go build -o hawkeye .
 sudo mv hawkeye /usr/local/bin/
 ```
 
-Requires **Go 1.22+**.
+Requires Go 1.22+.
 
 ## Configuration
 
 Configuration is stored in `~/.hawkeye/config.json`.
 
 | Command | Description |
-|---|---|
-| `hawkeye set server <url>` | Set the Hawkeye server URL (required) |
-| `hawkeye set project <uuid>` | Set the active project UUID (required) |
-| `hawkeye set token <jwt>` | Set the authentication bearer token |
-| `hawkeye set org <uuid>` | Set the organization UUID |
+|---------|-------------|
+| `hawkeye login <url> -u <email> -p <password>` | Login and auto-configure server, token, and org |
+| `hawkeye set server <url>` | Set the Hawkeye server URL |
+| `hawkeye set project <uuid>` | Set the active project UUID |
+| `hawkeye set token <jwt>` | Set the authentication bearer token manually |
+| `hawkeye set org <uuid>` | Set the organization UUID manually |
 | `hawkeye config` | Show current configuration |
+
+### Login
+
+The easiest way to configure the CLI. Login authenticates with the Hawkeye server, stores the JWT token, and automatically fetches your organization UUID:
+
+```bash
+hawkeye login http://localhost:3001 -u you@company.com -p 'your-password'
+```
+
+This sets server, token, and org in one step. You only need to set the project UUID separately.
 
 ## Commands
 
@@ -59,14 +68,18 @@ hawkeye investigate "High latency on checkout service"
 
 # Continue in an existing session
 hawkeye investigate "What about the database connections?" --session <uuid>
+
+# Enable debug output
+hawkeye investigate "Pod crashlooping in prod" --debug
 ```
 
 The output streams in real time, showing:
-- 🧠 **Chain-of-thought** reasoning steps
-- ⟳ **Progress** status updates
-- 📎 **Sources** being consulted (logs, metrics, traces, configs)
-- 💬 **Response** with the AI's analysis
-- 💡 **Follow-up suggestions**
+
+- ⟳ Progress milestones with a live spinner for sub-steps
+- 📎 Data sources being consulted (logs, metrics, alerts, configs)
+- 🔍 Chain-of-thought investigation with streamed reasoning
+- 💬 Final response with the AI's analysis
+- 💡 Follow-up suggestions
 
 ### `sessions` — List Sessions
 
@@ -105,23 +118,24 @@ hawkeye prompts
 ## Example Workflow
 
 ```bash
-# 1. Set up
-hawkeye set server https://hawkeye.internal.company.com
-hawkeye set project abc-123-def
-hawkeye set token eyJhbGc...
+# 1. Login
+hawkeye login https://hawkeye.internal.company.com -u you@company.com -p 'password'
 
-# 2. Browse available prompts
+# 2. Set project
+hawkeye set project abc-123-def
+
+# 3. Browse available prompts
 hawkeye prompts
 
-# 3. Run investigation
+# 4. Run investigation
 hawkeye investigate "Investigate the PagerDuty alert for high error rate on payments-api"
 
-# 4. Review
+# 5. Review
 hawkeye sessions
 hawkeye inspect <session-uuid>
 hawkeye summary <session-uuid>
 
-# 5. Follow up in the same session
+# 6. Follow up in the same session
 hawkeye investigate "Can you check the database connection pool metrics?" -s <session-uuid>
 ```
 
@@ -129,22 +143,23 @@ hawkeye investigate "Can you check the database connection pool metrics?" -s <se
 
 ```
 hawkeye-cli/
-├── main.go                      # Entry point + all commands
-├── go.mod                       # Zero external dependencies
+├── main.go                  # Entry point + all commands
+├── go.mod                   # Zero external dependencies
 ├── .gitignore
 ├── internal/
 │   ├── api/
-│   │   └── client.go            # HTTP client for Hawkeye API
+│   │   ├── client.go        # HTTP client, SSE streaming, API methods
+│   │   └── display.go       # Stream display handler (dedup, spinner, delta-print)
 │   ├── config/
-│   │   └── config.go            # Persistent config (~/.hawkeye/)
+│   │   └── config.go        # Persistent config (~/.hawkeye/)
 │   └── display/
-│       └── display.go           # Terminal formatting & colors
+│       └── display.go       # Terminal formatting & colors
 └── README.md
 ```
 
 ## Dependencies
 
-**None.** This CLI uses only the Go standard library. No cobra, no viper, no external packages — just `net/http`, `encoding/json`, and friends. This makes it trivial to build and cross-compile.
+None. This CLI uses only the Go standard library. No cobra, no viper, no external packages — just `net/http`, `encoding/json`, and friends. This makes it trivial to build and cross-compile.
 
 ## API Coverage
 
@@ -152,12 +167,14 @@ This CLI currently covers the core investigation workflow:
 
 | API Endpoint | CLI Command |
 |---|---|
+| `POST /v1/user/login` | `login` |
+| `GET /v1/user` | `login` (auto-fetches org) |
 | `POST /v1/inference/new_session` | `investigate` (auto-creates) |
 | `POST /v1/inference/session` | `investigate` (streams response) |
 | `POST /v1/inference/session/list` | `sessions` |
 | `POST /v1/inference/session/inspect` | `inspect` |
-| `GET  /v1/inference/session/summary/{id}` | `summary` |
-| `GET  /v1/inference/prompt-library` | `prompts` |
+| `GET /v1/inference/session/summary/{id}` | `summary` |
+| `GET /v1/inference/prompt-library` | `prompts` |
 
 Additional endpoints (ratings, file uploads, instructions, xray, watch, incidents, etc.) can be added as needed.
 
