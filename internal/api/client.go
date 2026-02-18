@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -20,18 +19,24 @@ type Client struct {
 	httpClient *http.Client
 	token      string
 	orgUUID    string
+	debug      bool
 }
 
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(cfg.Server, "/"),
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute,
+			// No timeout on the client — investigations can take 30+ minutes.
+			// We rely on the server closing the SSE stream (end_turn) to finish.
+			Timeout: 0,
 		},
 		token:   cfg.Token,
 		orgUUID: cfg.OrgUUID,
 	}
 }
+
+// SetDebug enables debug output for SSE parsing.
+func (c *Client) SetDebug(on bool) { c.debug = on }
 
 func (c *Client) setHeaders(req *http.Request, hasBody bool) {
 	if hasBody {
@@ -84,7 +89,6 @@ func NewClientWithServer(server string) *Client {
 func (c *Client) Login(email, password string) (*LoginResponse, error) {
 	reqBody := LoginRequest{Email: email, Password: password}
 
-	// Try common login endpoints
 	endpoints := []string{
 		"/v1/user/login",
 		"/v1/auth/login",
@@ -101,7 +105,6 @@ func (c *Client) Login(email, password string) (*LoginResponse, error) {
 			continue
 		}
 
-		// Check for error in response body
 		if resp.Error != "" {
 			return nil, fmt.Errorf("login failed: %s", resp.Error)
 		}
@@ -109,7 +112,6 @@ func (c *Client) Login(email, password string) (*LoginResponse, error) {
 			return nil, fmt.Errorf("login failed: %s", resp.ErrorMessage)
 		}
 
-		// Extract token (different APIs use different field names)
 		token := resp.AccessToken
 		if token == "" {
 			token = resp.Token
@@ -120,17 +122,13 @@ func (c *Client) Login(email, password string) (*LoginResponse, error) {
 		}
 
 		resp.AccessToken = token
-
-		// Set token on client so subsequent calls are authenticated
 		c.token = token
-
 		return &resp, nil
 	}
 
 	return nil, fmt.Errorf("login failed (tried %d endpoints): %w", len(endpoints), lastErr)
 }
 
-// FetchUserInfo retrieves the current user's info including org UUID.
 func (c *Client) FetchUserInfo() (*UserSpec, error) {
 	var resp UserInfoResponse
 	if err := c.doJSON("GET", "/v1/user", nil, &resp); err != nil {
@@ -149,15 +147,10 @@ type GenDBRequest struct {
 	ClientIdentifier string `json:"client_identifier,omitempty"`
 }
 
-type GenDBSpec struct {
-	UUID string `json:"uuid"`
-}
-
 type NewSessionRequest struct {
 	Request          *GenDBRequest `json:"request,omitempty"`
 	OrganizationUUID string        `json:"organization_uuid,omitempty"`
 	ProjectUUID      string        `json:"project_uuid,omitempty"`
-	GenDBSpec        *GenDBSpec    `json:"gendb_spec,omitempty"`
 }
 
 type GenDBResponse struct {
@@ -177,7 +170,6 @@ func (c *Client) NewSession(projectUUID string) (*NewSessionResponse, error) {
 		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli"},
 		OrganizationUUID: c.orgUUID,
 		ProjectUUID:      projectUUID,
-		GenDBSpec:        &GenDBSpec{UUID: c.orgUUID},
 	}
 	var resp NewSessionResponse
 	if err := c.doJSON("POST", "/v1/inference/new_session", reqBody, &resp); err != nil {
@@ -226,7 +218,7 @@ type ProcessPromptResponse struct {
 // StreamCallback is called for each streamed response chunk.
 type StreamCallback func(resp *ProcessPromptResponse)
 
-func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, debug bool, cb StreamCallback) error {
+func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb StreamCallback) error {
 	reqBody := ProcessPromptRequest{
 		Request:     &GenDBRequest{ClientIdentifier: "hawkeye-cli"},
 		Action:      "ACTION_NEXT",
@@ -252,8 +244,6 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, de
 		return fmt.Errorf("creating request: %w", err)
 	}
 	c.setHeaders(req, true)
-	// Also accept SSE
-	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -266,190 +256,66 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, de
 		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(errBody))
 	}
 
-	if debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Response Content-Type: %s\n", resp.Header.Get("Content-Type"))
-		fmt.Fprintf(os.Stderr, "[DEBUG] Transfer-Encoding: %s\n", resp.Header.Get("Transfer-Encoding"))
+	if c.debug {
+		fmt.Fprintf(io.Discard, "[DEBUG] Content-Type: %s\n", resp.Header.Get("Content-Type"))
 	}
 
-	contentType := resp.Header.Get("Content-Type")
-
-	// SSE format
-	if strings.Contains(contentType, "text/event-stream") {
-		return c.readSSEStream(resp.Body, debug, cb)
-	}
-
-	// Try generic stream reading that handles NDJSON, chunked JSON, and gRPC-gateway
-	return c.readJSONStream(resp.Body, debug, cb)
-}
-
-func (c *Client) readSSEStream(body io.Reader, debug bool, cb StreamCallback) error {
-	scanner := bufio.NewScanner(body)
+	scanner := bufio.NewScanner(resp.Body)
+	// 1 MB buffer for large streamed chunks (chain-of-thought can be huge)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG SSE] %s\n", line)
-		}
-
-		// SSE format: "data: {...}"
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
-				break
-			}
-			if done := c.tryParseAndCallback(data, debug, cb); done {
-				break
-			}
+		// SSE format: lines starting with "data: " contain the JSON payload.
+		// Blank lines are event separators — skip them.
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
 
-		// Also try plain JSON lines
-		line = strings.TrimSpace(line)
-		if line == "" || line == ":" {
+		// Strip SSE "data: " prefix
+		jsonStr := trimmed
+		if strings.HasPrefix(trimmed, "data: ") {
+			jsonStr = strings.TrimPrefix(trimmed, "data: ")
+		} else if strings.HasPrefix(trimmed, "data:") {
+			jsonStr = strings.TrimPrefix(trimmed, "data:")
+		}
+
+		// Skip SSE comments and other non-data fields
+		if strings.HasPrefix(trimmed, ":") || strings.HasPrefix(trimmed, "event:") || strings.HasPrefix(trimmed, "id:") || strings.HasPrefix(trimmed, "retry:") {
 			continue
 		}
-		if done := c.tryParseAndCallback(line, debug, cb); done {
-			break
+
+		jsonStr = strings.TrimSpace(jsonStr)
+		if jsonStr == "" || jsonStr == "[DONE]" {
+			continue
 		}
-	}
-	return scanner.Err()
-}
 
-func (c *Client) readJSONStream(body io.Reader, debug bool, cb StreamCallback) error {
-	// Use a buffered reader and JSON decoder to handle:
-	// - NDJSON (one JSON object per line)
-	// - Concatenated JSON objects (no newlines)
-	// - gRPC-gateway array format [{"result":...},{"result":...}]
-	reader := bufio.NewReader(body)
+		var streamResp ProcessPromptResponse
+		if err := json.Unmarshal([]byte(jsonStr), &streamResp); err != nil {
+			// Try gRPC-gateway envelope
+			var envelope struct {
+				Result *ProcessPromptResponse `json:"result"`
+			}
+			if err2 := json.Unmarshal([]byte(jsonStr), &envelope); err2 == nil && envelope.Result != nil {
+				cb(envelope.Result)
+				if envelope.Result.Message != nil && envelope.Result.Message.EndTurn {
+					return nil
+				}
+				continue
+			}
+			// Skip unparseable lines
+			continue
+		}
 
-	// Peek to see if it starts with '[' (JSON array from gRPC-gateway)
-	firstByte, err := reader.ReadByte()
-	if err != nil {
-		if err == io.EOF {
+		cb(&streamResp)
+		if streamResp.Message != nil && streamResp.Message.EndTurn {
 			return nil
 		}
-		return fmt.Errorf("reading stream: %w", err)
 	}
 
-	if firstByte == '[' {
-		// gRPC-gateway streaming array format
-		if debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Detected JSON array stream\n")
-		}
-		return c.readJSONArrayStream(reader, debug, cb)
-	}
-
-	// Put the byte back and try line-by-line
-	combined := io.MultiReader(bytes.NewReader([]byte{firstByte}), reader)
-	scanner := bufio.NewScanner(combined)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		if debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG LINE] %s\n", line)
-		}
-
-		// Handle SSE-style data lines mixed in JSON responses
-		if strings.HasPrefix(line, "data: ") {
-			line = strings.TrimPrefix(line, "data: ")
-			if line == "[DONE]" {
-				break
-			}
-		}
-
-		if done := c.tryParseAndCallback(line, debug, cb); done {
-			break
-		}
-	}
 	return scanner.Err()
-}
-
-func (c *Client) readJSONArrayStream(reader *bufio.Reader, debug bool, cb StreamCallback) error {
-	decoder := json.NewDecoder(reader)
-
-	// Read opening bracket already consumed, so we work with the decoder on remaining
-	// Actually we already consumed '[', so wrap in a decoder that sees the array contents
-	for decoder.More() {
-		// Skip commas between elements
-		var envelope struct {
-			Result *ProcessPromptResponse `json:"result"`
-			Error  *json.RawMessage       `json:"error,omitempty"`
-			// Also try flat response
-			Response *GenDBResponse `json:"response,omitempty"`
-			Message  *Message       `json:"message,omitempty"`
-		}
-
-		if err := decoder.Decode(&envelope); err != nil {
-			if err == io.EOF {
-				break
-			}
-			if debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] JSON array decode error: %v\n", err)
-			}
-			continue
-		}
-
-		if envelope.Result != nil {
-			cb(envelope.Result)
-			if envelope.Result.Message != nil && envelope.Result.Message.EndTurn {
-				return nil
-			}
-		} else if envelope.Message != nil {
-			resp := &ProcessPromptResponse{
-				Response: envelope.Response,
-				Message:  envelope.Message,
-			}
-			cb(resp)
-			if envelope.Message.EndTurn {
-				return nil
-			}
-		}
-	}
-	return nil
-}
-
-func (c *Client) tryParseAndCallback(data string, debug bool, cb StreamCallback) bool {
-	data = strings.TrimSpace(data)
-	if data == "" {
-		return false
-	}
-
-	// Strip leading comma (from array streaming)
-	data = strings.TrimLeft(data, ",")
-	data = strings.TrimSpace(data)
-	if data == "" || data == "]" {
-		return false
-	}
-
-	// Try direct ProcessPromptResponse
-	var streamResp ProcessPromptResponse
-	if err := json.Unmarshal([]byte(data), &streamResp); err == nil {
-		if streamResp.Message != nil || streamResp.Error != "" {
-			cb(&streamResp)
-			return streamResp.Message != nil && streamResp.Message.EndTurn
-		}
-	}
-
-	// Try gRPC-gateway result envelope
-	var envelope struct {
-		Result *ProcessPromptResponse `json:"result"`
-	}
-	if err := json.Unmarshal([]byte(data), &envelope); err == nil && envelope.Result != nil {
-		cb(envelope.Result)
-		return envelope.Result.Message != nil && envelope.Result.Message.EndTurn
-	}
-
-	if debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Unparseable chunk: %.200s\n", data)
-	}
-	return false
 }
 
 // --- Session List ---
@@ -499,15 +365,15 @@ func (c *Client) SessionList(projectUUID string, limit int) (*SessionListRespons
 // --- Session Inspect ---
 
 type PromptCycle struct {
-	ID                 string           `json:"id"`
-	CreateTime         string           `json:"create_time"`
-	FinalAnswer        string           `json:"final_answer"`
-	Rating             string           `json:"rating"`
-	FollowUpSuggestions []string        `json:"follow_up_suggestions"`
-	Sources            []Source         `json:"sources"`
-	ChainOfThoughts    []ChainOfThought `json:"chain_of_thoughts"`
-	Status             string           `json:"status"`
-	Request            *ProcessPromptRequest  `json:"request,omitempty"`
+	ID                  string           `json:"id"`
+	CreateTime          string           `json:"create_time"`
+	FinalAnswer         string           `json:"final_answer"`
+	Rating              string           `json:"rating"`
+	FollowUpSuggestions []string         `json:"follow_up_suggestions"`
+	Sources             []Source         `json:"sources"`
+	ChainOfThoughts     []ChainOfThought `json:"chain_of_thoughts"`
+	Status              string           `json:"status"`
+	Request             *ProcessPromptRequest `json:"request,omitempty"`
 }
 
 type Source struct {
@@ -518,15 +384,15 @@ type Source struct {
 }
 
 type ChainOfThought struct {
-	ID            string   `json:"id"`
-	Category      string   `json:"category"`
-	Description   string   `json:"description"`
-	Status        string   `json:"status"`
-	Investigation string   `json:"investigation"`
-	Explanation   string   `json:"explanation"`
-	Sources       []string `json:"sources_involved"`
-	CotStatus     string   `json:"cot_status"`
-	ProcessingTime string  `json:"processing_time"`
+	ID             string   `json:"id"`
+	Category       string   `json:"category"`
+	Description    string   `json:"description"`
+	Status         string   `json:"status"`
+	Investigation  string   `json:"investigation"`
+	Explanation    string   `json:"explanation"`
+	Sources        []string `json:"sources_involved"`
+	CotStatus      string   `json:"cot_status"`
+	ProcessingTime string   `json:"processing_time"`
 }
 
 type SessionInspectRequest struct {
@@ -561,10 +427,10 @@ func (c *Client) SessionInspect(projectUUID, sessionUUID string) (*SessionInspec
 // --- Session Summary ---
 
 type SessionSummary struct {
-	ActionItems    []string `json:"action_items"`
-	Analysis       string   `json:"analysis"`
-	Rating         string   `json:"rating"`
-	ShortSummary   *ShortSessionSummary `json:"short_session_summary"`
+	ActionItems  []string             `json:"action_items"`
+	Analysis     string               `json:"analysis"`
+	Rating       string               `json:"rating"`
+	ShortSummary *ShortSessionSummary `json:"short_session_summary"`
 }
 
 type ShortSessionSummary struct {
@@ -591,9 +457,9 @@ func (c *Client) GetSessionSummary(projectUUID, sessionUUID string) (*GetSession
 // --- Prompt Library ---
 
 type InitialPrompt struct {
-	UUID    string `json:"uuid"`
+	UUID     string `json:"uuid"`
 	Oneliner string `json:"oneliner"`
-	Prompt  string `json:"prompt"`
+	Prompt   string `json:"prompt"`
 }
 
 type PromptLibraryResponse struct {
@@ -624,10 +490,6 @@ func (c *Client) doJSON(method, path string, reqBody interface{}, result interfa
 	}
 
 	fullURL := c.baseURL + path
-	if method == "GET" && strings.Contains(path, "?") {
-		// URL already built
-		fullURL = c.baseURL + path
-	}
 
 	req, err := http.NewRequest(method, fullURL, bodyReader)
 	if err != nil {
