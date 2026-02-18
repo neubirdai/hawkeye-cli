@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Spinner frames for activity indication
@@ -19,6 +21,12 @@ type StreamDisplay struct {
 	seenProgress map[string]bool
 	spinnerIdx   int
 	activityUp   bool
+
+	// Background spinner: keeps animating during dead air
+	spinnerMu      sync.Mutex
+	activityText   string        // text currently shown on the spinner line
+	stopSpinner    chan struct{} // closed to stop the background ticker
+	spinnerRunning bool          // true when background goroutine is alive
 
 	// Source deduplication
 	seenSourceIDs  map[string]bool
@@ -181,6 +189,12 @@ func (d *StreamDisplay) flush() {
 	}
 }
 
+// Stop cleans up the background spinner goroutine.
+// Call this when the stream is done.
+func (d *StreamDisplay) Stop() {
+	d.clearActivity()
+}
+
 // --- Progress ---
 
 func (d *StreamDisplay) handleProgress(parts []string) {
@@ -209,23 +223,74 @@ func (d *StreamDisplay) handleProgress(parts []string) {
 	d.lastProgress = text
 	display := extractProgressDescription(text)
 	fmt.Printf("  ⟳ %s\n", display)
+
+	// Start a spinner below the permanent line so there's
+	// visible animation during dead air between events.
+	d.showActivity(text)
 }
 
 func (d *StreamDisplay) showActivity(text string) {
+	d.spinnerMu.Lock()
+	defer d.spinnerMu.Unlock()
+
+	d.activityText = extractProgressDescription(text)
+	d.renderSpinnerFrame()
+	d.activityUp = true
+
+	// Start background ticker if not already running
+	if !d.spinnerRunning {
+		d.stopSpinner = make(chan struct{})
+		d.spinnerRunning = true
+		go d.runSpinnerLoop(d.stopSpinner)
+	}
+}
+
+func (d *StreamDisplay) clearActivity() {
+	d.spinnerMu.Lock()
+	defer d.spinnerMu.Unlock()
+
+	if !d.activityUp {
+		return
+	}
+
+	// Stop the background ticker
+	if d.spinnerRunning {
+		close(d.stopSpinner)
+		d.spinnerRunning = false
+	}
+
+	fmt.Printf("\r%-80s\r", "")
+	d.activityUp = false
+	d.activityText = ""
+}
+
+// renderSpinnerFrame writes one frame to the terminal. Caller must hold spinnerMu.
+func (d *StreamDisplay) renderSpinnerFrame() {
 	frame := spinnerFrames[d.spinnerIdx%len(spinnerFrames)]
 	d.spinnerIdx++
-	display := extractProgressDescription(text)
+	display := d.activityText
 	if len(display) > 70 {
 		display = display[:67] + "..."
 	}
 	fmt.Printf("\r  %s %s%-20s", frame, display, "")
-	d.activityUp = true
 }
 
-func (d *StreamDisplay) clearActivity() {
-	if d.activityUp {
-		fmt.Printf("\r%-80s\r", "")
-		d.activityUp = false
+// runSpinnerLoop animates the spinner in the background every 120ms.
+func (d *StreamDisplay) runSpinnerLoop(stop chan struct{}) {
+	ticker := time.NewTicker(120 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			d.spinnerMu.Lock()
+			if d.activityUp {
+				d.renderSpinnerFrame()
+			}
+			d.spinnerMu.Unlock()
+		}
 	}
 }
 
