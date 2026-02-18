@@ -46,6 +46,7 @@ type StreamDisplay struct {
 	cotHeaderUp    bool   // true once the step header is printed
 	cotEverStarted bool   // true after first COT event
 	currentCotID   string // ID of the COT step we're currently displaying
+	cotSeparatorDone bool // true once the separator line after COT content is printed
 
 	// Rich metadata for current round
 	cotDescription string
@@ -113,6 +114,12 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 	if ct != "CONTENT_TYPE_CHAIN_OF_THOUGHT" && d.cotEverStarted && d.cotPrintedLen > 0 {
 		if d.cotAccumulated != "" && !strings.HasSuffix(d.cotAccumulated, "\n") {
 			fmt.Println()
+		}
+		// Print a separator line once after COT content ends
+		if !d.cotSeparatorDone {
+			fmt.Println()
+			fmt.Printf("  %s────────────────────────────────────────────────────────────────%s\n", ansiDim, ansiReset)
+			d.cotSeparatorDone = true
 		}
 	}
 	if ct != "CONTENT_TYPE_CHAT_RESPONSE" && d.chatAccumulated != "" && !strings.HasSuffix(d.chatAccumulated, "\n") {
@@ -595,6 +602,7 @@ func (d *StreamDisplay) startNewRound(cot cotJSON) {
 	d.cotStatus = ""
 	d.cotSources = nil
 	d.currentCotID = cot.ID
+	d.cotSeparatorDone = false
 
 	d.updateCOTMetadata(cot)
 }
@@ -796,8 +804,6 @@ func (d *StreamDisplay) endCOTRound() {
 			fmt.Println()
 			fmt.Printf("     %s\n", strings.Join(footer, " · "))
 		}
-		fmt.Println()
-		fmt.Printf("  %s────────────────────────────────────────────────────────────────%s\n", ansiDim, ansiReset)
 		fmt.Println()
 	}
 
