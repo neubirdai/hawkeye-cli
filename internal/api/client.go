@@ -40,6 +40,74 @@ func (c *Client) setHeaders(req *http.Request) {
 	}
 }
 
+// --- Authentication ---
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	AccessToken  string `json:"access_token,omitempty"`
+	Token        string `json:"token,omitempty"`
+	OrgUUID      string `json:"org_uuid,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// NewClientWithServer creates a client from just a server URL (for login before config is set).
+func NewClientWithServer(server string) *Client {
+	return &Client{
+		baseURL:    strings.TrimRight(server, "/"),
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+func (c *Client) Login(email, password string) (*LoginResponse, error) {
+	reqBody := LoginRequest{Email: email, Password: password}
+
+	// Try common login endpoints
+	endpoints := []string{
+		"/v1/user/login",
+		"/v1/auth/login",
+		"/api/v1/login",
+		"/login",
+	}
+
+	var lastErr error
+	for _, ep := range endpoints {
+		var resp LoginResponse
+		err := c.doJSON("POST", ep, reqBody, &resp)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Check for error in response body
+		if resp.Error != "" {
+			return nil, fmt.Errorf("login failed: %s", resp.Error)
+		}
+		if resp.ErrorMessage != "" {
+			return nil, fmt.Errorf("login failed: %s", resp.ErrorMessage)
+		}
+
+		// Extract token (different APIs use different field names)
+		token := resp.AccessToken
+		if token == "" {
+			token = resp.Token
+		}
+		if token == "" {
+			lastErr = fmt.Errorf("no token in response from %s", ep)
+			continue
+		}
+
+		resp.AccessToken = token
+		return &resp, nil
+	}
+
+	return nil, fmt.Errorf("login failed (tried %d endpoints): %w", len(endpoints), lastErr)
+}
+
 // --- Session Management ---
 
 type GenDBRequest struct {
@@ -239,15 +307,15 @@ func (c *Client) SessionList(projectUUID string, limit int) (*SessionListRespons
 // --- Session Inspect ---
 
 type PromptCycle struct {
-	ID                 string           `json:"id"`
-	CreateTime         string           `json:"create_time"`
-	FinalAnswer        string           `json:"final_answer"`
-	Rating             string           `json:"rating"`
-	FollowUpSuggestions []string        `json:"follow_up_suggestions"`
-	Sources            []Source         `json:"sources"`
-	ChainOfThoughts    []ChainOfThought `json:"chain_of_thoughts"`
-	Status             string           `json:"status"`
-	Request            *ProcessPromptRequest  `json:"request,omitempty"`
+	ID                  string                `json:"id"`
+	CreateTime          string                `json:"create_time"`
+	FinalAnswer         string                `json:"final_answer"`
+	Rating              string                `json:"rating"`
+	FollowUpSuggestions []string              `json:"follow_up_suggestions"`
+	Sources             []Source              `json:"sources"`
+	ChainOfThoughts     []ChainOfThought      `json:"chain_of_thoughts"`
+	Status              string                `json:"status"`
+	Request             *ProcessPromptRequest `json:"request,omitempty"`
 }
 
 type Source struct {
@@ -258,15 +326,15 @@ type Source struct {
 }
 
 type ChainOfThought struct {
-	ID            string   `json:"id"`
-	Category      string   `json:"category"`
-	Description   string   `json:"description"`
-	Status        string   `json:"status"`
-	Investigation string   `json:"investigation"`
-	Explanation   string   `json:"explanation"`
-	Sources       []string `json:"sources_involved"`
-	CotStatus     string   `json:"cot_status"`
-	ProcessingTime string  `json:"processing_time"`
+	ID             string   `json:"id"`
+	Category       string   `json:"category"`
+	Description    string   `json:"description"`
+	Status         string   `json:"status"`
+	Investigation  string   `json:"investigation"`
+	Explanation    string   `json:"explanation"`
+	Sources        []string `json:"sources_involved"`
+	CotStatus      string   `json:"cot_status"`
+	ProcessingTime string   `json:"processing_time"`
 }
 
 type SessionInspectRequest struct {
@@ -301,10 +369,10 @@ func (c *Client) SessionInspect(projectUUID, sessionUUID string) (*SessionInspec
 // --- Session Summary ---
 
 type SessionSummary struct {
-	ActionItems    []string `json:"action_items"`
-	Analysis       string   `json:"analysis"`
-	Rating         string   `json:"rating"`
-	ShortSummary   *ShortSessionSummary `json:"short_session_summary"`
+	ActionItems  []string             `json:"action_items"`
+	Analysis     string               `json:"analysis"`
+	Rating       string               `json:"rating"`
+	ShortSummary *ShortSessionSummary `json:"short_session_summary"`
 }
 
 type ShortSessionSummary struct {
@@ -331,9 +399,9 @@ func (c *Client) GetSessionSummary(projectUUID, sessionUUID string) (*GetSession
 // --- Prompt Library ---
 
 type InitialPrompt struct {
-	UUID    string `json:"uuid"`
+	UUID     string `json:"uuid"`
 	Oneliner string `json:"oneliner"`
-	Prompt  string `json:"prompt"`
+	Prompt   string `json:"prompt"`
 }
 
 type PromptLibraryResponse struct {

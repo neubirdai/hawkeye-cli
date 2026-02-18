@@ -24,6 +24,8 @@ func main() {
 	var err error
 
 	switch args[0] {
+	case "login":
+		err = cmdLogin(args[1:])
 	case "set":
 		err = cmdSet(args[1:])
 	case "config":
@@ -52,6 +54,109 @@ func main() {
 		display.Error(err.Error())
 		os.Exit(1)
 	}
+}
+
+// ─── login ───────────────────────────────────────────────────────────────────
+
+func cmdLogin(args []string) error {
+	var username, password string
+	var positional []string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-u", "--username":
+			if i+1 < len(args) {
+				i++
+				username = args[i]
+			} else {
+				return fmt.Errorf("--username requires a value")
+			}
+		case "-p", "--password":
+			if i+1 < len(args) {
+				i++
+				password = args[i]
+			} else {
+				return fmt.Errorf("--password requires a value")
+			}
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+
+	if len(positional) == 0 {
+		fmt.Println("Usage: hawkeye login <server-url> -u <username> -p <password>")
+		fmt.Println()
+		fmt.Println("Examples:")
+		fmt.Println("  hawkeye login http://localhost:3001 -u admin@company.com -p mypassword")
+		fmt.Println("  hawkeye login https://hawkeye.internal:8080 -u user -p pass")
+		return nil
+	}
+
+	serverURL := positional[0]
+
+	// Prompt for missing credentials
+	if username == "" {
+		fmt.Print("Username/Email: ")
+		fmt.Scanln(&username)
+	}
+	if password == "" {
+		fmt.Print("Password: ")
+		fmt.Scanln(&password)
+	}
+
+	if username == "" || password == "" {
+		return fmt.Errorf("username and password are required")
+	}
+
+	fmt.Println()
+	display.Spinner("Authenticating...")
+
+	client := api.NewClientWithServer(serverURL)
+	loginResp, err := client.Login(username, password)
+	if err != nil {
+		display.ClearLine()
+		return fmt.Errorf("authentication failed: %w", err)
+	}
+
+	display.ClearLine()
+	display.Success("Authenticated successfully")
+
+	// Save config
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	cfg.Server = serverURL
+	cfg.Username = username
+	cfg.Token = loginResp.AccessToken
+
+	if loginResp.OrgUUID != "" {
+		cfg.OrgUUID = loginResp.OrgUUID
+	}
+
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+
+	display.Info("Server:", serverURL)
+	display.Info("User:", username)
+	if cfg.OrgUUID != "" {
+		display.Info("Organization:", cfg.OrgUUID)
+	}
+
+	fmt.Println()
+	if cfg.ProjectID == "" {
+		fmt.Printf("  %sNext:%s Run %shawkeye set project <uuid>%s to set your project.\n\n",
+			display.Dim, display.Reset, display.Cyan, display.Reset)
+	} else {
+		fmt.Printf("  %sReady!%s Project is already set to %s.\n",
+			display.Dim, display.Reset, cfg.ProjectID)
+		fmt.Printf("  %sNext:%s Run %shawkeye investigate \"<question>\"%s to start.\n\n",
+			display.Dim, display.Reset, display.Cyan, display.Reset)
+	}
+
+	return nil
 }
 
 // ─── set ────────────────────────────────────────────────────────────────────
@@ -111,6 +216,12 @@ func cmdConfig() error {
 		server = display.Dim + "(not set)" + display.Reset
 	}
 	display.Info("Server:", server)
+
+	username := cfg.Username
+	if username == "" {
+		username = display.Dim + "(not set)" + display.Reset
+	}
+	display.Info("User:", username)
 
 	project := cfg.ProjectID
 	if project == "" {
@@ -651,12 +762,16 @@ func printUsage() {
 %sUsage:%s
   hawkeye <command> [arguments]
 
-%sSetup:%s
-  set server <url>          Set the Hawkeye server URL
+%sGetting Started:%s
+  login <url> -u <user> -p <pass>  Authenticate with a Hawkeye server
+  set project <uuid>               Set the active project UUID
+  config                           Show current configuration
+
+%sSettings:%s
+  set server <url>          Override the server URL
   set project <uuid>        Set the active project UUID
-  set token <jwt>           Set the authentication token
+  set token <jwt>           Manually set the auth token
   set org <uuid>            Set the organization UUID
-  config                    Show current configuration
 
 %sInvestigation:%s
   investigate "<question>"  Run an AI-powered investigation (streams output)
@@ -672,14 +787,15 @@ func printUsage() {
   prompts                   Browse available investigation prompts
 
 %sExamples:%s
-  hawkeye set server http://hawkeye.internal:8080
-  hawkeye set project abc-123-def
+  hawkeye login http://localhost:3001 -u admin@company.com -p secret
+  hawkeye set project 66520f61-6a43-48ac-8286-a7e7cf9755c5
   hawkeye investigate "Why is the API returning 500 errors?"
   hawkeye investigate "Check DB connections" -s <session-uuid>
   hawkeye sessions
   hawkeye inspect <session-uuid>
 
 `, display.Bold, display.Reset, version,
+		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,

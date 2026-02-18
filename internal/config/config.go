@@ -12,6 +12,7 @@ const configFile = "config.json"
 
 type Config struct {
 	Server    string `json:"server"`
+	Username  string `json:"username,omitempty"`
 	Token     string `json:"token,omitempty"`
 	OrgUUID   string `json:"org_uuid,omitempty"`
 	ProjectID string `json:"project_uuid,omitempty"`
@@ -69,7 +70,10 @@ func (c *Config) Save() error {
 
 func (c *Config) Validate() error {
 	if c.Server == "" {
-		return fmt.Errorf("server not configured. Run: hawkeye set server <url>")
+		return fmt.Errorf("not logged in. Run: hawkeye login <server-url> -u <username> -p <password>")
+	}
+	if c.Token == "" {
+		return fmt.Errorf("not authenticated. Run: hawkeye login <server-url> -u <username> -p <password>")
 	}
 	return nil
 }
