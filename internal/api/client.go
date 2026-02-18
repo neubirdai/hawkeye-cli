@@ -403,6 +403,10 @@ func (c *Client) debugLog(eventType string, resp *ProcessPromptResponse) {
 	if resp.Message.Metadata != nil && resp.Message.Metadata.IsDeltaTrue() {
 		isDelta = " [delta]"
 	}
+	partsInfo := ""
+	if n := len(resp.Message.Content.Parts); n > 1 {
+		partsInfo = fmt.Sprintf(" [%d parts]", n)
+	}
 	partSnippet := ""
 	if len(resp.Message.Content.Parts) > 0 {
 		p := resp.Message.Content.Parts[0]
@@ -411,7 +415,7 @@ func (c *Client) debugLog(eventType string, resp *ProcessPromptResponse) {
 		}
 		partSnippet = p
 	}
-	fmt.Fprintf(os.Stderr, "[DEBUG] evt=%-16s ct=%-40s%s | %s\n", eventType, ct, isDelta, partSnippet)
+	fmt.Fprintf(os.Stderr, "[DEBUG] evt=%-16s ct=%-40s%s%s | %s\n", eventType, ct, isDelta, partsInfo, partSnippet)
 }
 
 // --- Session List ---

@@ -24,24 +24,23 @@ type StreamDisplay struct {
 	seenSourceIDs  map[string]bool
 	sourcesPrinted bool
 
-	// Chain-of-thought: unified state machine.
-	// Handles all server modes:
-	//   - event-type servers (cot_start/cot_delta/cot_end)
-	//   - metadata-delta servers (event:"message" with is_delta:true)
-	//   - pure legacy servers (event:"message" with full-text replacement)
+	// Chain-of-thought state.
+	// Server sends ALL COT steps in the parts[] array of every COT event.
+	// parts[0] = step 1, parts[1] = step 2, etc.  The CLI must find the
+	// IN_PROGRESS step and stream its investigation text.
 	cotRound       int    // step number (1-based)
 	cotAccumulated string // full investigation text for current round
-	cotPrintedLen  int    // how many chars of cotAccumulated we've printed
+	cotPrintedLen  int    // how many chars we've printed
 	cotHeaderUp    bool   // true once the step header is printed
-	cotRoundDone   bool   // true after cot_end; next content starts new round
-	cotEverStarted bool   // true after first COT content arrives
+	cotEverStarted bool   // true after first COT event
+	currentCotID   string // ID of the COT step we're currently displaying
 
-	// Rich metadata for the current round
-	cotDescription string   // long description (tooltip in UI)
-	cotExplanation string   // short explanation (sidebar in UI)
-	cotCategory    string   // e.g., "Discovery"
-	cotStatus      string   // e.g., "CHAIN_OF_THOUGHT_STATUS_DONE"
-	cotSources     []string // sources_involved
+	// Rich metadata for current round
+	cotDescription string
+	cotExplanation string
+	cotCategory    string
+	cotStatus      string
+	cotSources     []string
 
 	lastContentType string
 
@@ -53,6 +52,9 @@ type StreamDisplay struct {
 	// Final answer accumulator
 	FinalAnswer string
 	SessionUUID string
+
+	// Markdown colorizer for streaming output
+	md mdPrinter
 }
 
 func NewStreamDisplay(debug bool) *StreamDisplay {
@@ -83,7 +85,7 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 		d.endCOTRound()
 	}
 
-	// When content type changes FROM chat response, finish the chat block.
+	// When content type changes FROM chat response, finish the chat block
 	if d.chatHeaderUp && ct != "CONTENT_TYPE_CHAT_RESPONSE" {
 		d.finishChatBlock()
 	}
@@ -91,6 +93,17 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 	// Clear spinner before non-progress content
 	if ct != "CONTENT_TYPE_PROGRESS_STATUS" && d.activityUp {
 		d.clearActivity()
+	}
+
+	// Ensure a newline after streamed COT/chat text before printing other content.
+	// The investigation text streams via fmt.Print() and may not end with '\n'.
+	if ct != "CONTENT_TYPE_CHAIN_OF_THOUGHT" && d.cotEverStarted && d.cotPrintedLen > 0 {
+		if d.cotAccumulated != "" && !strings.HasSuffix(d.cotAccumulated, "\n") {
+			fmt.Println()
+		}
+	}
+	if ct != "CONTENT_TYPE_CHAT_RESPONSE" && d.chatAccumulated != "" && !strings.HasSuffix(d.chatAccumulated, "\n") {
+		fmt.Println()
 	}
 
 	d.lastContentType = ct
@@ -126,9 +139,7 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 		}
 
 	case "CONTENT_TYPE_ERROR_MESSAGE":
-		for _, p := range parts {
-			fmt.Printf("  ✗ %s\n", p)
-		}
+		d.handleErrorMessage(parts)
 
 	case "CONTENT_TYPE_ALTERNATE_QUESTIONS":
 		if len(parts) > 0 {
@@ -161,6 +172,7 @@ func (d *StreamDisplay) flush() {
 	if d.activityUp {
 		d.clearActivity()
 	}
+	d.md.flush() // flush any remaining buffered markdown
 	if d.cotEverStarted && d.cotPrintedLen > 0 {
 		d.endCOTRound()
 	}
@@ -231,6 +243,46 @@ func normalizeProgress(text string) string {
 		return "(Selected N data sources)"
 	}
 	return text
+}
+
+// --- Error Messages ---
+
+// errorJSON matches the structure the server sends in ERROR_MESSAGE events.
+// Contains query SQL we do NOT want to display.
+type errorJSON struct {
+	Question string   `json:"question"`
+	Query    []string `json:"query"`
+	Error    string   `json:"error"`
+	Status   string   `json:"status"`
+}
+
+// handleErrorMessage parses error events and shows only the question + error,
+// NOT the raw SQL queries.
+func (d *StreamDisplay) handleErrorMessage(parts []string) {
+	for _, p := range parts {
+		// Try to parse as structured error JSON
+		var errObj errorJSON
+		if err := json.Unmarshal([]byte(p), &errObj); err == nil && errObj.Question != "" {
+			// Structured error — show question and error, suppress SQL
+			fmt.Printf("  ✗ %s", errObj.Question)
+			if errObj.Error != "" {
+				fmt.Printf(" — %s", errObj.Error)
+			}
+			if errObj.Status != "" && errObj.Status != "error" {
+				fmt.Printf(" (%s)", errObj.Status)
+			}
+			fmt.Println()
+			continue
+		}
+
+		// Plain text error — show as-is, but skip if it looks like raw JSON with queries
+		if strings.Contains(p, `"query"`) && strings.Contains(p, "SELECT ") {
+			// Looks like unparsed query JSON — skip it
+			continue
+		}
+
+		fmt.Printf("  ✗ %s\n", p)
+	}
 }
 
 // --- Sources ---
@@ -305,38 +357,71 @@ type cotJSON struct {
 	Sources       []string `json:"sources_involved"`
 }
 
-// handleChainOfThought routes COT events to the appropriate handler.
-// Uses a unified state machine that works regardless of server event format.
+// handleChainOfThought routes COT events.
+// The server sends ALL COT steps in the parts[] array. We must find the
+// active (IN_PROGRESS) step and stream its investigation text.
 func (d *StreamDisplay) handleChainOfThought(parts []string, eventType string, meta *Metadata) {
 	if len(parts) == 0 {
 		return
 	}
 
-	raw := parts[0]
-	var cot cotJSON
-	if err := json.Unmarshal([]byte(raw), &cot); err != nil {
+	isDelta := meta != nil && meta.IsDeltaTrue()
+
+	// --- Delta-mode event types (cot_start / cot_delta / cot_end) ---
+	// These still only carry one COT per event, so parts[0] is fine.
+	switch eventType {
+	case "cot_start":
+		var cot cotJSON
+		if err := json.Unmarshal([]byte(parts[0]), &cot); err != nil {
+			return
+		}
+		d.startNewRound(cot)
+		d.ensureHeader()
+		return
+	case "cot_delta":
+		var cot cotJSON
+		if err := json.Unmarshal([]byte(parts[0]), &cot); err != nil {
+			return
+		}
+		d.onCOTDelta(cot)
+		return
+	case "cot_end":
+		var cot cotJSON
+		if err := json.Unmarshal([]byte(parts[0]), &cot); err != nil {
+			return
+		}
+		d.updateCOTMetadata(cot)
 		return
 	}
 
-	isDelta := meta != nil && meta.IsDeltaTrue()
-
-	switch eventType {
-	case "cot_start":
-		d.onCOTStart(cot)
-	case "cot_delta":
-		d.onCOTDelta(cot)
-	case "cot_end":
-		d.onCOTEnd(cot)
-	default:
-		// Legacy "message" event or fallback.
-		// Use is_delta metadata to distinguish:
-		//   is_delta=true  → investigation field is incremental (like cot_delta)
-		//   is_delta=false → investigation field is full accumulated text
-		if isDelta {
-			d.onCOTDelta(cot)
-		} else {
-			d.onCOTFullText(cot)
+	// --- Legacy mode (all events are evt=message) ---
+	// Parse ALL parts to find the active step.
+	var allCots []cotJSON
+	for _, raw := range parts {
+		var cot cotJSON
+		if err := json.Unmarshal([]byte(raw), &cot); err != nil {
+			continue
 		}
+		allCots = append(allCots, cot)
+	}
+	if len(allCots) == 0 {
+		return
+	}
+
+	// Find the IN_PROGRESS step — that's the one actively being investigated.
+	// Fall back to the last step if none is explicitly IN_PROGRESS.
+	activeCot := allCots[len(allCots)-1]
+	for _, cot := range allCots {
+		if cot.Status == "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS" || cot.Status == "IN_PROGRESS" {
+			activeCot = cot
+			break
+		}
+	}
+
+	if isDelta {
+		d.onCOTDelta(activeCot)
+	} else {
+		d.onCOTFullText(activeCot)
 	}
 }
 
@@ -351,9 +436,13 @@ func (d *StreamDisplay) startNewRound(cot cotJSON) {
 	d.cotAccumulated = ""
 	d.cotPrintedLen = 0
 	d.cotHeaderUp = false
-	d.cotRoundDone = false
+	d.cotDescription = ""
+	d.cotExplanation = ""
+	d.cotCategory = ""
+	d.cotStatus = ""
+	d.cotSources = nil
+	d.currentCotID = cot.ID
 
-	// Store all metadata from this COT
 	d.updateCOTMetadata(cot)
 }
 
@@ -403,10 +492,8 @@ func (d *StreamDisplay) ensureHeader() {
 	// Description (secondary — the detailed scope shown in UI tooltip)
 	if d.cotDescription != "" {
 		if d.cotExplanation != "" {
-			// Show as secondary line, distinct from explanation
 			fmt.Printf("     ↳ %s\n", d.cotDescription)
 		} else {
-			// No explanation, description is the primary text
 			fmt.Printf("     %s\n", d.cotDescription)
 		}
 	}
@@ -415,26 +502,17 @@ func (d *StreamDisplay) ensureHeader() {
 	d.cotHeaderUp = true
 }
 
-// onCOTStart handles cot_start events: new investigation step begins.
-func (d *StreamDisplay) onCOTStart(cot cotJSON) {
-	d.startNewRound(cot)
-	d.ensureHeader()
-}
-
-// onCOTDelta handles incremental investigation text.
-// The investigation field contains ONLY the new characters.
+// onCOTDelta handles incremental investigation text (for future server support).
 func (d *StreamDisplay) onCOTDelta(cot cotJSON) {
 	delta := cot.Investigation
 	if delta == "" {
 		return
 	}
 
-	// If previous round is done or we haven't started, begin new round
-	if !d.cotEverStarted || d.cotRoundDone {
+	if !d.cotEverStarted {
 		d.startNewRound(cot)
 	}
 
-	// Update metadata in case it arrives with deltas
 	d.updateCOTMetadata(cot)
 	d.ensureHeader()
 
@@ -442,48 +520,41 @@ func (d *StreamDisplay) onCOTDelta(cot cotJSON) {
 		d.clearActivity()
 	}
 
-	fmt.Print(delta)
+	d.md.printMarkdown(delta)
 	d.cotAccumulated += delta
 	d.cotPrintedLen = len(d.cotAccumulated)
 }
 
-// onCOTEnd handles cot_end events: step complete, final metadata.
-func (d *StreamDisplay) onCOTEnd(cot cotJSON) {
-	d.updateCOTMetadata(cot)
-	d.cotRoundDone = true
-}
-
-// onCOTFullText handles legacy full-text COT events.
-// The investigation field contains ALL accumulated text (not a delta).
-// New rounds are detected by text shrinkage or metadata changes.
+// onCOTFullText handles the legacy server behavior:
+// Every COT event carries the full parts[] array. The active step's
+// investigation field contains the FULL accumulated text. When the
+// active step changes (different ID), we start a new round.
 func (d *StreamDisplay) onCOTFullText(cot cotJSON) {
 	fullText := cot.Investigation
 	fullLen := len(fullText)
 
-	// Detect new round:
-	// 1. Previous round was marked done (cot_end seen)
-	// 2. Text shrunk (server replaced with new step's text)
-	// 3. Description changed
-	// 4. Explanation changed
+	// Detect new round — primary signal is the COT ID changing.
 	isNewRound := false
 
-	if d.cotRoundDone {
-		isNewRound = true
-	} else if d.cotPrintedLen > 0 && fullLen > 0 && fullLen < d.cotPrintedLen {
-		isNewRound = true
-	} else if d.cotDescription != "" && cot.Description != "" && cot.Description != d.cotDescription {
-		isNewRound = true
-	} else if d.cotExplanation != "" && cot.Explanation != "" && cot.Explanation != d.cotExplanation {
+	if d.cotEverStarted && cot.ID != "" && cot.ID != d.currentCotID {
 		isNewRound = true
 	}
 
-	if isNewRound || !d.cotEverStarted {
+	// Fallback heuristics for when IDs aren't available
+	if !isNewRound && d.cotEverStarted && d.cotPrintedLen > 0 && fullLen > 0 && fullLen < d.cotPrintedLen {
+		isNewRound = true
+	}
+
+	if isNewRound {
+		d.startNewRound(cot)
+	} else if !d.cotEverStarted {
 		d.startNewRound(cot)
 	} else {
+		// Same round — update metadata (status, sources may update mid-round)
 		d.updateCOTMetadata(cot)
 	}
 
-	// Print any new text (delta = chars beyond what we've already printed)
+	// Print any new text beyond what we've already printed
 	if fullText != "" && fullLen > d.cotPrintedLen {
 		d.ensureHeader()
 
@@ -492,7 +563,7 @@ func (d *StreamDisplay) onCOTFullText(cot cotJSON) {
 		}
 
 		newText := fullText[d.cotPrintedLen:]
-		fmt.Print(newText)
+		d.md.printMarkdown(newText)
 		d.cotAccumulated = fullText
 		d.cotPrintedLen = fullLen
 	}
@@ -501,6 +572,14 @@ func (d *StreamDisplay) onCOTFullText(cot cotJSON) {
 // endCOTRound prints the footer and resets per-round state.
 func (d *StreamDisplay) endCOTRound() {
 	if d.cotPrintedLen > 0 {
+		// Flush any buffered partial markdown line
+		d.md.flush()
+
+		// Ensure we're on a fresh line after streamed text
+		if d.cotAccumulated != "" && !strings.HasSuffix(d.cotAccumulated, "\n") {
+			fmt.Println()
+		}
+
 		// Step footer: status + source count
 		statusLabel := formatCOTStatus(d.cotStatus)
 		srcCount := len(d.cotSources)
@@ -522,7 +601,6 @@ func (d *StreamDisplay) endCOTRound() {
 	d.cotAccumulated = ""
 	d.cotPrintedLen = 0
 	d.cotHeaderUp = false
-	d.cotRoundDone = false
 	d.cotDescription = ""
 	d.cotExplanation = ""
 	d.cotCategory = ""
@@ -580,20 +658,13 @@ func (d *StreamDisplay) handleChatResponse(parts []string, meta *Metadata) {
 		if delta == "" {
 			return
 		}
-
 		if d.activityUp {
 			d.clearActivity()
 		}
 		if !d.chatHeaderUp {
-			fmt.Println()
-			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-			fmt.Println("  💬 Response")
-			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-			fmt.Println()
-			d.chatHeaderUp = true
+			d.printChatHeader()
 		}
-
-		fmt.Print(delta)
+		d.md.printMarkdown(delta)
 		d.chatAccumulated += delta
 		d.chatPrintedLen = len(d.chatAccumulated)
 		d.FinalAnswer = strings.TrimSpace(d.chatAccumulated)
@@ -603,32 +674,40 @@ func (d *StreamDisplay) handleChatResponse(parts []string, meta *Metadata) {
 		if text == "" {
 			return
 		}
-
 		if len(text) > d.chatPrintedLen {
 			newText := text[d.chatPrintedLen:]
 			if d.activityUp {
 				d.clearActivity()
 			}
 			if !d.chatHeaderUp {
-				fmt.Println()
-				fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-				fmt.Println("  💬 Response")
-				fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-				fmt.Println()
-				d.chatHeaderUp = true
+				d.printChatHeader()
 			}
-			fmt.Print(newText)
+			d.md.printMarkdown(newText)
 			d.chatPrintedLen = len(text)
 		}
 		d.FinalAnswer = strings.TrimSpace(text)
 	}
 }
 
+func (d *StreamDisplay) printChatHeader() {
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("  💬 Response")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+	d.chatHeaderUp = true
+}
+
 func (d *StreamDisplay) finishChatBlock() {
 	if !d.chatHeaderUp {
 		return
 	}
-	fmt.Println()
+	// Flush any buffered partial markdown line
+	d.md.flush()
+	// Ensure we're on a fresh line after streamed text
+	if d.chatAccumulated != "" && !strings.HasSuffix(d.chatAccumulated, "\n") {
+		fmt.Println()
+	}
 	fmt.Println()
 	d.chatHeaderUp = false
 	d.chatPrintedLen = 0
