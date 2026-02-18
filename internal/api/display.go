@@ -8,32 +8,36 @@ import (
 )
 
 // StreamDisplay handles clean terminal output for SSE streams.
-// It deduplicates progress messages, parses source JSON, compresses
-// chain-of-thought token streams, and strips HTML from responses.
 type StreamDisplay struct {
 	debug bool
 
-	// Deduplication state
-	lastProgress    string
-	progressCount   int
-	seenSourceIDs   map[string]bool
-	sourcesPrinted  bool
+	// Progress deduplication — aggressive global dedup
+	lastProgress string
+	seenProgress map[string]bool
 
-	// Chain-of-thought: only keep the latest version per ID
-	lastCOTID       string
-	lastCOTContent  string
-	cotPrinted      bool
+	// Source deduplication
+	seenSourceIDs  map[string]bool
+	sourcesPrinted bool
+
+	// Chain-of-thought: track per-ID to avoid reprinting old investigations
+	cotPrintedLen   map[string]int // COT ID → how many chars of investigation already printed
+	cotHeaderPrinted map[string]bool // COT ID → whether we printed the header
+	cotActive       bool
+	activeCOTID     string
+	lastContentType string
 
 	// Final answer accumulator
-	FinalAnswer     string
-	SessionUUID     string
-	SessionName     string
+	FinalAnswer string
+	SessionUUID string
 }
 
 func NewStreamDisplay(debug bool) *StreamDisplay {
 	return &StreamDisplay{
-		debug:         debug,
-		seenSourceIDs: make(map[string]bool),
+		debug:            debug,
+		seenSourceIDs:    make(map[string]bool),
+		seenProgress:     make(map[string]bool),
+		cotPrintedLen:    make(map[string]int),
+		cotHeaderPrinted: make(map[string]bool),
 	}
 }
 
@@ -51,6 +55,13 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 	ct := msg.Content.ContentType
 	parts := msg.Content.Parts
 
+	// When content type changes FROM chain-of-thought, finalize the COT block
+	if d.cotActive && ct != "CONTENT_TYPE_CHAIN_OF_THOUGHT" {
+		d.finishCOTBlock()
+	}
+
+	d.lastContentType = ct
+
 	switch ct {
 	case "CONTENT_TYPE_PROGRESS_STATUS":
 		d.handleProgress(parts)
@@ -63,6 +74,28 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 
 	case "CONTENT_TYPE_CHAT_RESPONSE":
 		d.handleChatResponse(parts)
+
+	case "CONTENT_TYPE_SESSION_NAME":
+		if len(parts) > 0 {
+			fmt.Printf("  📛 %s\n", parts[0])
+		}
+
+	case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
+		fmt.Println()
+		fmt.Println("  💡 Follow-up suggestions:")
+		for i, p := range parts {
+			fmt.Printf("     %d. %s\n", i+1, p)
+		}
+
+	case "CONTENT_TYPE_EXECUTION_TIME":
+		if len(parts) > 0 {
+			fmt.Printf("  ⏱  %s\n", parts[0])
+		}
+
+	case "CONTENT_TYPE_ERROR_MESSAGE":
+		for _, p := range parts {
+			fmt.Printf("  ✗ %s\n", p)
+		}
 	}
 
 	if msg.EndTurn {
@@ -72,13 +105,8 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 
 // flush prints any pending state at stream end.
 func (d *StreamDisplay) flush() {
-	// Print final chain-of-thought if we haven't yet
-	if d.lastCOTContent != "" && !d.cotPrinted {
-		d.printCOT()
-	}
-	// Clear progress line
-	if d.progressCount > 0 {
-		fmt.Println()
+	if d.cotActive {
+		d.finishCOTBlock()
 	}
 }
 
@@ -90,24 +118,33 @@ func (d *StreamDisplay) handleProgress(parts []string) {
 	}
 	text := parts[0]
 
-	// Identical to last → just bump counter, overwrite line
-	if text == d.lastProgress {
-		d.progressCount++
+	normKey := normalizeProgress(text)
+
+	if d.seenProgress[normKey] {
+		d.lastProgress = text
 		return
 	}
 
-	// New progress step
+	d.seenProgress[normKey] = true
 	d.lastProgress = text
-	d.progressCount = 1
-
-	// Print on a new line (carriage-return overwrite for rapid repeats isn't
-	// worth the terminal-capability gymnastics in v1; just deduplicate.)
 	fmt.Printf("  ⟳ %s\n", text)
+}
+
+func normalizeProgress(text string) string {
+	if strings.HasPrefix(text, "(Found ") && strings.HasSuffix(text, " results)") {
+		return "(Found N results)"
+	}
+	if strings.Contains(text, "result streams") {
+		return "(Analyzing N result streams)"
+	}
+	if strings.Contains(text, "datas") && strings.Contains(text, "ources") {
+		return "(Selected N data sources)"
+	}
+	return text
 }
 
 // --- Sources ---
 
-// sourceJSON is the shape of each element in the parts array for CONTENT_TYPE_SOURCES.
 type sourceJSON struct {
 	ID       string `json:"id"`
 	Category string `json:"category"`
@@ -120,7 +157,6 @@ func (d *StreamDisplay) handleSources(parts []string) {
 	for _, raw := range parts {
 		var s sourceJSON
 		if err := json.Unmarshal([]byte(raw), &s); err != nil {
-			// Not JSON — maybe plain text?
 			if !d.seenSourceIDs[raw] {
 				d.seenSourceIDs[raw] = true
 				newSources = append(newSources, sourceJSON{Title: raw})
@@ -140,7 +176,7 @@ func (d *StreamDisplay) handleSources(parts []string) {
 	}
 
 	if len(newSources) == 0 {
-		return // all duplicates
+		return
 	}
 
 	if !d.sourcesPrinted {
@@ -155,19 +191,13 @@ func (d *StreamDisplay) handleSources(parts []string) {
 	}
 }
 
-// formatSourceLabel turns a sourceJSON into a readable one-liner.
 func formatSourceLabel(s sourceJSON) string {
 	cat := s.Category
 	name := s.Title
-
-	// Shorten long metric names: "metric_aws_prod.containerinsights_container_cpu_limit"
-	// → "container_cpu_limit"
 	if idx := strings.LastIndex(name, "."); idx >= 0 {
 		name = name[idx+1:]
 	}
-	// Further cleanup: strip common prefixes
 	name = strings.TrimPrefix(name, "containerinsights_")
-
 	if cat != "" {
 		return fmt.Sprintf("[%s] %s", cat, name)
 	}
@@ -176,7 +206,6 @@ func formatSourceLabel(s sourceJSON) string {
 
 // --- Chain of Thought ---
 
-// cotJSON is the shape of the investigation JSON inside CONTENT_TYPE_CHAIN_OF_THOUGHT parts.
 type cotJSON struct {
 	ID            string   `json:"id"`
 	Category      string   `json:"category"`
@@ -192,59 +221,61 @@ func (d *StreamDisplay) handleChainOfThought(parts []string) {
 		return
 	}
 
-	// The server token-streams COT: it sends the SAME JSON object many times,
-	// each time with a few more characters appended to the "investigation" field.
-	// We only want to display the FINAL version, so we just keep overwriting.
 	raw := parts[0]
+	d.cotActive = true
 
 	var cot cotJSON
 	if err := json.Unmarshal([]byte(raw), &cot); err != nil {
-		// Might be a partial or non-JSON string — store raw
-		d.lastCOTContent = raw
 		return
 	}
 
-	d.lastCOTID = cot.ID
-	d.lastCOTContent = raw
-	d.cotPrinted = false
+	// Use COT ID to track per-investigation-step progress.
+	// If no ID, use description as fallback key.
+	cotID := cot.ID
+	if cotID == "" {
+		cotID = cot.Description
+	}
+	if cotID == "" {
+		cotID = "_default"
+	}
+	d.activeCOTID = cotID
 
-	// If status changed to completed, print now
-	if cot.Status == "completed" || cot.Status == "done" {
-		d.printCOT()
+	// How much of this COT's investigation have we already printed?
+	alreadyPrinted := d.cotPrintedLen[cotID]
+
+	// Stream new investigation text as it arrives (delta printing)
+	if cot.Investigation != "" && len(cot.Investigation) > alreadyPrinted {
+		newText := cot.Investigation[alreadyPrinted:]
+
+		if !d.cotHeaderPrinted[cotID] {
+			// First chunk for this COT — print header
+			fmt.Println()
+			fmt.Println("  🔍 Investigation")
+			if cot.Description != "" {
+				fmt.Printf("     %s\n", cot.Description)
+			}
+			fmt.Println()
+			d.cotHeaderPrinted[cotID] = true
+		}
+
+		fmt.Print(newText)
+		d.cotPrintedLen[cotID] = len(cot.Investigation)
 	}
 }
 
-func (d *StreamDisplay) printCOT() {
-	if d.lastCOTContent == "" {
+func (d *StreamDisplay) finishCOTBlock() {
+	if !d.cotActive {
 		return
 	}
+	d.cotActive = false
 
-	var cot cotJSON
-	if err := json.Unmarshal([]byte(d.lastCOTContent), &cot); err != nil {
-		// Non-JSON — just print as-is
-		fmt.Printf("\n  🔍 Investigation:\n%s\n", d.lastCOTContent)
-		d.cotPrinted = true
-		return
-	}
-
-	fmt.Println()
-	fmt.Println("  🔍 Investigation")
-	if cot.Description != "" {
-		fmt.Printf("     %s\n", cot.Description)
-	}
-	if cot.Explanation != "" {
-		fmt.Printf("     %s\n", cot.Explanation)
-	}
-	fmt.Printf("     Status: %s\n", cot.Status)
-
-	if cot.Investigation != "" {
+	// Add trailing newlines if we printed any investigation text for this block
+	if d.activeCOTID != "" && d.cotPrintedLen[d.activeCOTID] > 0 {
 		fmt.Println()
-		// The investigation field contains markdown — print it directly.
-		// Strip excessive leading whitespace per line for terminal readability.
-		fmt.Println(cot.Investigation)
+		fmt.Println()
 	}
 
-	d.cotPrinted = true
+	d.activeCOTID = ""
 }
 
 // --- Chat Response ---
@@ -254,11 +285,6 @@ var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
 func (d *StreamDisplay) handleChatResponse(parts []string) {
 	if len(parts) == 0 {
 		return
-	}
-
-	// Print any pending COT before the final answer
-	if d.lastCOTContent != "" && !d.cotPrinted {
-		d.printCOT()
 	}
 
 	text := strings.Join(parts, "\n")
@@ -281,11 +307,9 @@ func (d *StreamDisplay) handleChatResponse(parts []string) {
 }
 
 func stripHTML(s string) string {
-	// Replace <br/> and <br> with newlines
 	s = strings.ReplaceAll(s, "<br/>", "\n")
 	s = strings.ReplaceAll(s, "<br>", "\n")
 	s = strings.ReplaceAll(s, "<br />", "\n")
-	// Strip remaining HTML tags
 	s = htmlTagRe.ReplaceAllString(s, "")
 	return s
 }
