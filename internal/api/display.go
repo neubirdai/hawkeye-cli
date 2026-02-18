@@ -7,24 +7,33 @@ import (
 	"strings"
 )
 
+// Spinner frames for activity indication
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
 // StreamDisplay handles clean terminal output for SSE streams.
 type StreamDisplay struct {
 	debug bool
 
-	// Progress deduplication — aggressive global dedup
+	// Progress tracking
 	lastProgress string
 	seenProgress map[string]bool
+	spinnerIdx   int
+	activityUp   bool
 
 	// Source deduplication
 	seenSourceIDs  map[string]bool
 	sourcesPrinted bool
 
 	// Chain-of-thought: track per-ID to avoid reprinting old investigations
-	cotPrintedLen   map[string]int // COT ID → how many chars of investigation already printed
-	cotHeaderPrinted map[string]bool // COT ID → whether we printed the header
-	cotActive       bool
-	activeCOTID     string
-	lastContentType string
+	cotPrintedLen    map[string]int
+	cotHeaderPrinted map[string]bool
+	cotActive        bool
+	activeCOTID      string
+	lastContentType  string
+
+	// Chat response: delta-print (token-streamed like COT)
+	chatPrintedLen int
+	chatHeaderUp   bool
 
 	// Final answer accumulator
 	FinalAnswer string
@@ -58,6 +67,16 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 	// When content type changes FROM chain-of-thought, finalize the COT block
 	if d.cotActive && ct != "CONTENT_TYPE_CHAIN_OF_THOUGHT" {
 		d.finishCOTBlock()
+	}
+
+	// When content type changes FROM chat response, finalize it
+	if d.chatHeaderUp && ct != "CONTENT_TYPE_CHAT_RESPONSE" {
+		d.finishChatBlock()
+	}
+
+	// Clear spinner before printing real content
+	if ct != "CONTENT_TYPE_PROGRESS_STATUS" && d.activityUp {
+		d.clearActivity()
 	}
 
 	d.lastContentType = ct
@@ -103,10 +122,15 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 	}
 }
 
-// flush prints any pending state at stream end.
 func (d *StreamDisplay) flush() {
+	if d.activityUp {
+		d.clearActivity()
+	}
 	if d.cotActive {
 		d.finishCOTBlock()
+	}
+	if d.chatHeaderUp {
+		d.finishChatBlock()
 	}
 }
 
@@ -117,17 +141,53 @@ func (d *StreamDisplay) handleProgress(parts []string) {
 		return
 	}
 	text := parts[0]
-
 	normKey := normalizeProgress(text)
 
 	if d.seenProgress[normKey] {
-		d.lastProgress = text
+		d.showActivity(text)
 		return
 	}
 
 	d.seenProgress[normKey] = true
+
+	if isActivityOnly(text) {
+		d.showActivity(text)
+		return
+	}
+
+	if d.activityUp {
+		d.clearActivity()
+	}
+
 	d.lastProgress = text
 	fmt.Printf("  ⟳ %s\n", text)
+}
+
+func (d *StreamDisplay) showActivity(text string) {
+	frame := spinnerFrames[d.spinnerIdx%len(spinnerFrames)]
+	d.spinnerIdx++
+
+	display := text
+	if len(display) > 70 {
+		display = display[:67] + "..."
+	}
+
+	fmt.Printf("\r  %s %s%-20s", frame, display, "")
+	d.activityUp = true
+}
+
+func (d *StreamDisplay) clearActivity() {
+	if d.activityUp {
+		fmt.Printf("\r%-80s\r", "")
+		d.activityUp = false
+	}
+}
+
+func isActivityOnly(text string) bool {
+	if strings.HasPrefix(text, "(") {
+		return true
+	}
+	return false
 }
 
 func normalizeProgress(text string) string {
@@ -229,8 +289,6 @@ func (d *StreamDisplay) handleChainOfThought(parts []string) {
 		return
 	}
 
-	// Use COT ID to track per-investigation-step progress.
-	// If no ID, use description as fallback key.
 	cotID := cot.ID
 	if cotID == "" {
 		cotID = cot.Description
@@ -240,15 +298,16 @@ func (d *StreamDisplay) handleChainOfThought(parts []string) {
 	}
 	d.activeCOTID = cotID
 
-	// How much of this COT's investigation have we already printed?
 	alreadyPrinted := d.cotPrintedLen[cotID]
 
-	// Stream new investigation text as it arrives (delta printing)
 	if cot.Investigation != "" && len(cot.Investigation) > alreadyPrinted {
 		newText := cot.Investigation[alreadyPrinted:]
 
+		if d.activityUp {
+			d.clearActivity()
+		}
+
 		if !d.cotHeaderPrinted[cotID] {
-			// First chunk for this COT — print header
 			fmt.Println()
 			fmt.Println("  🔍 Investigation")
 			if cot.Description != "" {
@@ -269,7 +328,6 @@ func (d *StreamDisplay) finishCOTBlock() {
 	}
 	d.cotActive = false
 
-	// Add trailing newlines if we printed any investigation text for this block
 	if d.activeCOTID != "" && d.cotPrintedLen[d.activeCOTID] > 0 {
 		fmt.Println()
 		fmt.Println()
@@ -278,7 +336,7 @@ func (d *StreamDisplay) finishCOTBlock() {
 	d.activeCOTID = ""
 }
 
-// --- Chat Response ---
+// --- Chat Response (delta-printed, same as COT) ---
 
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
 
@@ -289,21 +347,47 @@ func (d *StreamDisplay) handleChatResponse(parts []string) {
 
 	text := strings.Join(parts, "\n")
 	text = stripHTML(text)
-	text = strings.TrimSpace(text)
 
 	if text == "" {
 		return
 	}
 
-	d.FinalAnswer = text
+	// Delta print: only output new characters
+	if len(text) > d.chatPrintedLen {
+		newText := text[d.chatPrintedLen:]
+
+		if d.activityUp {
+			d.clearActivity()
+		}
+
+		if !d.chatHeaderUp {
+			fmt.Println()
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println("  💬 Response")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println()
+			d.chatHeaderUp = true
+		}
+
+		fmt.Print(newText)
+		d.chatPrintedLen = len(text)
+	}
+
+	// Always update final answer with latest full text
+	d.FinalAnswer = strings.TrimSpace(text)
+}
+
+func (d *StreamDisplay) finishChatBlock() {
+	if !d.chatHeaderUp {
+		return
+	}
 
 	fmt.Println()
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("  💬 Response")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println()
-	fmt.Println(text)
-	fmt.Println()
+
+	// Reset for next chat response block
+	d.chatHeaderUp = false
+	d.chatPrintedLen = 0
 }
 
 func stripHTML(s string) string {
