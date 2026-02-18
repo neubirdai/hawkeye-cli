@@ -131,8 +131,14 @@ func cmdLogin(args []string) error {
 	cfg.Username = username
 	cfg.Token = loginResp.AccessToken
 
-	if loginResp.OrgUUID != "" {
-		cfg.OrgUUID = loginResp.OrgUUID
+	// Auto-fetch organization UUID from user profile
+	authedClient := api.NewClient(cfg)
+	userInfo, userErr := authedClient.FetchUserInfo()
+	if userErr != nil {
+		display.Warn(fmt.Sprintf("Could not auto-detect organization: %v", userErr))
+		display.Warn("You can set it manually: hawkeye set org <uuid>")
+	} else if userInfo != nil && userInfo.OrgUUID != "" {
+		cfg.OrgUUID = userInfo.OrgUUID
 	}
 
 	if err := cfg.Save(); err != nil {

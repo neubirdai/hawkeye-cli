@@ -32,8 +32,10 @@ func NewClient(cfg *config.Config) *Client {
 	}
 }
 
-func (c *Client) setHeaders(req *http.Request) {
-	req.Header.Set("Content-Type", "application/json")
+func (c *Client) setHeaders(req *http.Request, hasBody bool) {
+	if hasBody {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Accept", "application/json")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -51,8 +53,23 @@ type LoginResponse struct {
 	AccessToken  string `json:"access_token,omitempty"`
 	Token        string `json:"token,omitempty"`
 	OrgUUID      string `json:"org_uuid,omitempty"`
+	UserUUID     string `json:"user_uuid,omitempty"`
 	ErrorMessage string `json:"error_message,omitempty"`
 	Error        string `json:"error,omitempty"`
+}
+
+type UserSpec struct {
+	UUID      string `json:"uuid"`
+	Email     string `json:"email"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	OrgUUID   string `json:"org_uuid"`
+	UserRole  string `json:"user_role"`
+}
+
+type UserInfoResponse struct {
+	Response *GenDBResponse `json:"response,omitempty"`
+	Specs    []UserSpec     `json:"specs,omitempty"`
 }
 
 // NewClientWithServer creates a client from just a server URL (for login before config is set).
@@ -102,10 +119,26 @@ func (c *Client) Login(email, password string) (*LoginResponse, error) {
 		}
 
 		resp.AccessToken = token
+
+		// Set token on client so subsequent calls are authenticated
+		c.token = token
+
 		return &resp, nil
 	}
 
 	return nil, fmt.Errorf("login failed (tried %d endpoints): %w", len(endpoints), lastErr)
+}
+
+// FetchUserInfo retrieves the current user's info including org UUID.
+func (c *Client) FetchUserInfo() (*UserSpec, error) {
+	var resp UserInfoResponse
+	if err := c.doJSON("GET", "/v1/user", nil, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Specs) == 0 {
+		return nil, fmt.Errorf("no user info returned")
+	}
+	return &resp.Specs[0], nil
 }
 
 // --- Session Management ---
@@ -211,7 +244,7 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
-	c.setHeaders(req)
+	c.setHeaders(req, true)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -307,15 +340,15 @@ func (c *Client) SessionList(projectUUID string, limit int) (*SessionListRespons
 // --- Session Inspect ---
 
 type PromptCycle struct {
-	ID                  string                `json:"id"`
-	CreateTime          string                `json:"create_time"`
-	FinalAnswer         string                `json:"final_answer"`
-	Rating              string                `json:"rating"`
-	FollowUpSuggestions []string              `json:"follow_up_suggestions"`
-	Sources             []Source              `json:"sources"`
-	ChainOfThoughts     []ChainOfThought      `json:"chain_of_thoughts"`
-	Status              string                `json:"status"`
-	Request             *ProcessPromptRequest `json:"request,omitempty"`
+	ID                 string           `json:"id"`
+	CreateTime         string           `json:"create_time"`
+	FinalAnswer        string           `json:"final_answer"`
+	Rating             string           `json:"rating"`
+	FollowUpSuggestions []string        `json:"follow_up_suggestions"`
+	Sources            []Source         `json:"sources"`
+	ChainOfThoughts    []ChainOfThought `json:"chain_of_thoughts"`
+	Status             string           `json:"status"`
+	Request            *ProcessPromptRequest  `json:"request,omitempty"`
 }
 
 type Source struct {
@@ -326,15 +359,15 @@ type Source struct {
 }
 
 type ChainOfThought struct {
-	ID             string   `json:"id"`
-	Category       string   `json:"category"`
-	Description    string   `json:"description"`
-	Status         string   `json:"status"`
-	Investigation  string   `json:"investigation"`
-	Explanation    string   `json:"explanation"`
-	Sources        []string `json:"sources_involved"`
-	CotStatus      string   `json:"cot_status"`
-	ProcessingTime string   `json:"processing_time"`
+	ID            string   `json:"id"`
+	Category      string   `json:"category"`
+	Description   string   `json:"description"`
+	Status        string   `json:"status"`
+	Investigation string   `json:"investigation"`
+	Explanation   string   `json:"explanation"`
+	Sources       []string `json:"sources_involved"`
+	CotStatus     string   `json:"cot_status"`
+	ProcessingTime string  `json:"processing_time"`
 }
 
 type SessionInspectRequest struct {
@@ -369,10 +402,10 @@ func (c *Client) SessionInspect(projectUUID, sessionUUID string) (*SessionInspec
 // --- Session Summary ---
 
 type SessionSummary struct {
-	ActionItems  []string             `json:"action_items"`
-	Analysis     string               `json:"analysis"`
-	Rating       string               `json:"rating"`
-	ShortSummary *ShortSessionSummary `json:"short_session_summary"`
+	ActionItems    []string `json:"action_items"`
+	Analysis       string   `json:"analysis"`
+	Rating         string   `json:"rating"`
+	ShortSummary   *ShortSessionSummary `json:"short_session_summary"`
 }
 
 type ShortSessionSummary struct {
@@ -399,9 +432,9 @@ func (c *Client) GetSessionSummary(projectUUID, sessionUUID string) (*GetSession
 // --- Prompt Library ---
 
 type InitialPrompt struct {
-	UUID     string `json:"uuid"`
+	UUID    string `json:"uuid"`
 	Oneliner string `json:"oneliner"`
-	Prompt   string `json:"prompt"`
+	Prompt  string `json:"prompt"`
 }
 
 type PromptLibraryResponse struct {
@@ -441,7 +474,7 @@ func (c *Client) doJSON(method, path string, reqBody interface{}, result interfa
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
-	c.setHeaders(req)
+	c.setHeaders(req, bodyReader != nil)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
