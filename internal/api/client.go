@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -274,7 +275,7 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 	}
 
 	if c.debug {
-		fmt.Fprintf(io.Discard, "[DEBUG] Content-Type: %s\n", resp.Header.Get("Content-Type"))
+		fmt.Fprintf(os.Stderr, "[DEBUG] Content-Type: %s\n", resp.Header.Get("Content-Type"))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -317,6 +318,18 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 			}
 			if err2 := json.Unmarshal([]byte(jsonStr), &envelope); err2 == nil && envelope.Result != nil {
 				cb(envelope.Result)
+				if c.debug && envelope.Result.Message != nil && envelope.Result.Message.Content != nil {
+					ct := envelope.Result.Message.Content.ContentType
+					partSnippet := ""
+					if len(envelope.Result.Message.Content.Parts) > 0 {
+						p := envelope.Result.Message.Content.Parts[0]
+						if len(p) > 120 {
+							p = p[:120] + "..."
+						}
+						partSnippet = p
+					}
+					fmt.Fprintf(os.Stderr, "[DEBUG] %s | %s\n", ct, partSnippet)
+				}
 				if envelope.Result.Message != nil && envelope.Result.Message.EndTurn {
 					return nil
 				}
@@ -327,6 +340,18 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 		}
 
 		cb(&streamResp)
+		if c.debug && streamResp.Message != nil && streamResp.Message.Content != nil {
+			ct := streamResp.Message.Content.ContentType
+			partSnippet := ""
+			if len(streamResp.Message.Content.Parts) > 0 {
+				p := streamResp.Message.Content.Parts[0]
+				if len(p) > 120 {
+					p = p[:120] + "..."
+				}
+				partSnippet = p
+			}
+			fmt.Fprintf(os.Stderr, "[DEBUG] %s | %s\n", ct, partSnippet)
+		}
 		if streamResp.Message != nil && streamResp.Message.EndTurn {
 			return nil
 		}
