@@ -797,6 +797,8 @@ func (d *StreamDisplay) endCOTRound() {
 			fmt.Printf("     %s\n", strings.Join(footer, " · "))
 		}
 		fmt.Println()
+		fmt.Printf("  %s────────────────────────────────────────────────────────────────%s\n", ansiDim, ansiReset)
+		fmt.Println()
 	}
 
 	// Reset per-round state
