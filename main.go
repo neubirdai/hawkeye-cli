@@ -259,6 +259,7 @@ func cmdConfig() error {
 
 func cmdInvestigate(args []string) error {
 	var sessionUUID string
+	var debugMode bool
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -270,6 +271,8 @@ func cmdInvestigate(args []string) error {
 			} else {
 				return fmt.Errorf("--session requires a value")
 			}
+		case "--debug":
+			debugMode = true
 		default:
 			positional = append(positional, args[i])
 		}
@@ -320,7 +323,7 @@ func cmdInvestigate(args []string) error {
 
 	lastContentType := ""
 
-	err = client.ProcessPromptStream(cfg.ProjectID, sessionUUID, prompt, func(resp *api.ProcessPromptResponse) {
+	err = client.ProcessPromptStream(cfg.ProjectID, sessionUUID, prompt, debugMode, func(resp *api.ProcessPromptResponse) {
 		if resp.Error != "" {
 			display.Error(resp.Error)
 			return
