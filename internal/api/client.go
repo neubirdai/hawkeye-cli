@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -148,10 +149,15 @@ type GenDBRequest struct {
 	UUID             string `json:"uuid,omitempty"`
 }
 
+type GenDBSpec struct {
+	UUID string `json:"uuid,omitempty"`
+}
+
 type NewSessionRequest struct {
 	Request          *GenDBRequest `json:"request,omitempty"`
 	OrganizationUUID string        `json:"organization_uuid,omitempty"`
 	ProjectUUID      string        `json:"project_uuid,omitempty"`
+	GenDBSpec        *GenDBSpec    `json:"gendb_spec,omitempty"`
 }
 
 type GenDBResponse struct {
@@ -171,6 +177,7 @@ func (c *Client) NewSession(projectUUID string) (*NewSessionResponse, error) {
 		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
 		OrganizationUUID: c.orgUUID,
 		ProjectUUID:      projectUUID,
+		GenDBSpec:        &GenDBSpec{UUID: newUUID()},
 	}
 	var resp NewSessionResponse
 	if err := c.doJSON("POST", "/v1/inference/new_session", reqBody, &resp); err != nil {
@@ -180,6 +187,15 @@ func (c *Client) NewSession(projectUUID string) (*NewSessionResponse, error) {
 		return nil, fmt.Errorf("server error: %s", resp.Response.ErrorMessage)
 	}
 	return &resp, nil
+}
+
+// newUUID generates a random v4 UUID (no external dependencies).
+func newUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // --- Process Prompt (Streaming) ---
