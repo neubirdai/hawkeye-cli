@@ -145,6 +145,7 @@ func (c *Client) FetchUserInfo() (*UserSpec, error) {
 type GenDBRequest struct {
 	RequestID        string `json:"request_id,omitempty"`
 	ClientIdentifier string `json:"client_identifier,omitempty"`
+	UUID             string `json:"uuid,omitempty"`
 }
 
 type NewSessionRequest struct {
@@ -167,7 +168,7 @@ type NewSessionResponse struct {
 
 func (c *Client) NewSession(projectUUID string) (*NewSessionResponse, error) {
 	reqBody := NewSessionRequest{
-		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli"},
+		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
 		OrganizationUUID: c.orgUUID,
 		ProjectUUID:      projectUUID,
 	}
@@ -220,7 +221,7 @@ type StreamCallback func(resp *ProcessPromptResponse)
 
 func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb StreamCallback) error {
 	reqBody := ProcessPromptRequest{
-		Request:     &GenDBRequest{ClientIdentifier: "hawkeye-cli"},
+		Request:     &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
 		Action:      "ACTION_NEXT",
 		SessionUUID: sessionUUID,
 		ProjectUUID: projectUUID,
@@ -350,7 +351,7 @@ type SessionListResponse struct {
 
 func (c *Client) SessionList(projectUUID string, limit int) (*SessionListResponse, error) {
 	reqBody := SessionListRequest{
-		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli"},
+		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
 		OrganizationUUID: c.orgUUID,
 		ProjectUUID:      projectUUID,
 		Pagination:       &PaginationRequest{Start: 0, Limit: limit},
@@ -411,7 +412,7 @@ type SessionInspectResponse struct {
 
 func (c *Client) SessionInspect(projectUUID, sessionUUID string) (*SessionInspectResponse, error) {
 	reqBody := SessionInspectRequest{
-		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli"},
+		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
 		OrganizationUUID: c.orgUUID,
 		ProjectUUID:      projectUUID,
 		SessionUUID:      sessionUUID,
