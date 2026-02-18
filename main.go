@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/neubird/hawkeye-cli/internal/api"
-	"github.com/neubird/hawkeye-cli/internal/config"
-	"github.com/neubird/hawkeye-cli/internal/display"
+	"github.com/neubirdai/hawkeye-cli/internal/api"
+	"github.com/neubirdai/hawkeye-cli/internal/config"
+	"github.com/neubirdai/hawkeye-cli/internal/display"
 )
 
 const version = "0.1.0"

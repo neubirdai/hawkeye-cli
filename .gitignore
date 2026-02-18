@@ -2,3 +2,4 @@ hawkeye
 dist/
 .hawkeye/
 *.exe
+.idea/
