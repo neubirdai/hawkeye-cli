@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/neubird/hawkeye-cli/internal/config"
+	"hawkeye-cli/internal/config"
 )
 
 type Client struct {
