@@ -297,6 +297,7 @@ func cmdInvestigate(args []string) error {
 	}
 
 	client := api.NewClient(cfg)
+	client.SetDebug(debugMode)
 
 	// Create session if needed
 	if sessionUUID == "" {
@@ -321,66 +322,12 @@ func cmdInvestigate(args []string) error {
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 80))
 
-	lastContentType := ""
+	// Use the StreamDisplay handler — it deduplicates progress messages,
+	// compresses chain-of-thought token streams, parses source JSON,
+	// and strips HTML from chat responses.
+	streamDisplay := api.NewStreamDisplay(debugMode)
 
-	err = client.ProcessPromptStream(cfg.ProjectID, sessionUUID, prompt, debugMode, func(resp *api.ProcessPromptResponse) {
-		if resp.Error != "" {
-			display.Error(resp.Error)
-			return
-		}
-		if resp.Message == nil || resp.Message.Content == nil {
-			return
-		}
-
-		ct := resp.Message.Content.ContentType
-		parts := resp.Message.Content.Parts
-
-		if ct != lastContentType && ct != "" {
-			if lastContentType == "CONTENT_TYPE_CHAT_RESPONSE" ||
-				lastContentType == "CONTENT_TYPE_CHAIN_OF_THOUGHT" {
-				fmt.Println()
-			}
-			fmt.Printf("\n%s\n", display.ContentTypeLabel(ct))
-			lastContentType = ct
-		}
-
-		switch ct {
-		case "CONTENT_TYPE_CHAT_RESPONSE", "CONTENT_TYPE_CHAIN_OF_THOUGHT":
-			for _, part := range parts {
-				fmt.Print(part)
-			}
-		case "CONTENT_TYPE_PROGRESS_STATUS":
-			for _, part := range parts {
-				fmt.Printf("  %s%s%s\n", display.Yellow, part, display.Reset)
-			}
-		case "CONTENT_TYPE_SOURCES":
-			for _, part := range parts {
-				fmt.Printf("  %s•%s %s\n", display.Blue, display.Reset, part)
-			}
-		case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
-			for i, part := range parts {
-				fmt.Printf("  %s%d.%s %s\n", display.Cyan, i+1, display.Reset, part)
-			}
-		case "CONTENT_TYPE_SESSION_NAME":
-			for _, part := range parts {
-				fmt.Printf("  %s\n", part)
-			}
-		case "CONTENT_TYPE_ERROR_MESSAGE":
-			for _, part := range parts {
-				display.Error(part)
-			}
-		case "CONTENT_TYPE_EXECUTION_TIME":
-			for _, part := range parts {
-				fmt.Printf("  %s%s%s\n", display.Gray, part, display.Reset)
-			}
-		case "CONTENT_TYPE_DONE_INDICATOR":
-			// no-op
-		default:
-			for _, part := range parts {
-				fmt.Printf("  %s\n", part)
-			}
-		}
-	})
+	err = client.ProcessPromptStream(cfg.ProjectID, sessionUUID, prompt, streamDisplay.HandleEvent)
 
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 80))
