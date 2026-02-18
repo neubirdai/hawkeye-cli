@@ -32,6 +32,9 @@ type StreamDisplay struct {
 	seenSourceIDs  map[string]bool
 	sourcesPrinted bool
 
+	// Error deduplication
+	seenErrors map[string]bool
+
 	// Chain-of-thought state.
 	// Server sends ALL COT steps in the parts[] array of every COT event.
 	// parts[0] = step 1, parts[1] = step 2, etc.  The CLI must find the
@@ -70,6 +73,7 @@ func NewStreamDisplay(debug bool) *StreamDisplay {
 		debug:         debug,
 		seenSourceIDs: make(map[string]bool),
 		seenProgress:  make(map[string]bool),
+		seenErrors:    make(map[string]bool),
 	}
 }
 
@@ -147,7 +151,9 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 		}
 
 	case "CONTENT_TYPE_ERROR_MESSAGE":
-		d.handleErrorMessage(parts)
+		// The web UI does nothing with ERROR_MESSAGE events (no-op).
+		// These are internal query retry/fix messages not meant for display.
+		// Do nothing.
 
 	case "CONTENT_TYPE_ALTERNATE_QUESTIONS":
 		if len(parts) > 0 {
@@ -343,12 +349,27 @@ type errorJSON struct {
 }
 
 // handleErrorMessage parses error events and shows only the question + error,
-// NOT the raw SQL queries.
+// NOT the raw SQL queries. Suppresses internal SQL retry errors entirely.
 func (d *StreamDisplay) handleErrorMessage(parts []string) {
 	for _, p := range parts {
 		// Try to parse as structured error JSON
 		var errObj errorJSON
 		if err := json.Unmarshal([]byte(p), &errObj); err == nil && errObj.Question != "" {
+			// Suppress internal SQL retry errors — these are noise from SQLFix filter
+			if isSQLRetryError(errObj.Error) {
+				continue
+			}
+
+			// Build display string for dedup check
+			errDisplay := errObj.Question
+			if errObj.Error != "" {
+				errDisplay += " — " + errObj.Error
+			}
+			if d.seenErrors[errDisplay] {
+				continue
+			}
+			d.seenErrors[errDisplay] = true
+
 			// Structured error — show question and error, suppress SQL
 			fmt.Printf("  ✗ %s", errObj.Question)
 			if errObj.Error != "" {
@@ -361,14 +382,42 @@ func (d *StreamDisplay) handleErrorMessage(parts []string) {
 			continue
 		}
 
-		// Plain text error — show as-is, but skip if it looks like raw JSON with queries
+		// Plain text error — skip if it looks like raw JSON with queries or SQL errors
 		if strings.Contains(p, `"query"`) && strings.Contains(p, "SELECT ") {
-			// Looks like unparsed query JSON — skip it
 			continue
 		}
+		if isSQLRetryError(p) {
+			continue
+		}
+		if d.seenErrors[p] {
+			continue
+		}
+		d.seenErrors[p] = true
 
 		fmt.Printf("  ✗ %s\n", p)
 	}
+}
+
+// isSQLRetryError returns true for SQL-related errors that are internal
+// query retries (from SQLFix/SQLSplitExecute filters) and should not be
+// shown to the user.
+func isSQLRetryError(text string) bool {
+	if text == "" {
+		return false
+	}
+	// Column not found errors from query retries
+	if strings.Contains(text, "column \"") && strings.Contains(text, "does not exist") {
+		return true
+	}
+	// SQL syntax errors
+	if strings.Contains(text, "LINE 1:") || strings.Contains(text, "HINT:") {
+		return true
+	}
+	// Generic SQL errors
+	if strings.Contains(text, "SELECT ") && strings.Contains(text, "FROM ") && strings.Contains(text, "error") {
+		return true
+	}
+	return false
 }
 
 // --- Sources ---
@@ -512,13 +561,30 @@ func (d *StreamDisplay) handleChainOfThought(parts []string, eventType string, m
 }
 
 // startNewRound ends any previous round and initializes state for a new one.
+// If the previous round was a placeholder (trivial content like "In progress..."),
+// we reuse the step number instead of incrementing.
 func (d *StreamDisplay) startNewRound(cot cotJSON) {
-	if d.cotEverStarted && d.cotPrintedLen > 0 {
-		d.endCOTRound()
+	if d.cotEverStarted {
+		prevWasTrivial := d.cotPrintedLen == 0 || isTrivialContent(d.cotAccumulated)
+
+		if d.cotPrintedLen > 0 && !prevWasTrivial {
+			d.endCOTRound()
+		} else if d.cotPrintedLen > 0 {
+			// Trivial round with printed content — silently clear without footer
+			d.silentClearRound()
+		}
+
+		// Only bump step number if the previous round had real content
+		if !prevWasTrivial {
+			d.cotRound++
+		}
+		// else: reuse the current step number
+	} else {
+		// Very first round
+		d.cotRound++
 	}
 
 	d.cotEverStarted = true
-	d.cotRound++
 	d.cotAccumulated = ""
 	d.cotPrintedLen = 0
 	d.cotHeaderUp = false
@@ -530,6 +596,33 @@ func (d *StreamDisplay) startNewRound(cot cotJSON) {
 	d.currentCotID = cot.ID
 
 	d.updateCOTMetadata(cot)
+}
+
+// isTrivialContent checks if the accumulated text is just a placeholder
+// that shouldn't count as a real investigation step.
+func isTrivialContent(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+	// Common placeholders the server sends before real content
+	lower := strings.ToLower(trimmed)
+	return lower == "in progress..." ||
+		lower == "investigating..." ||
+		lower == "analyzing..." ||
+		len(trimmed) < 20
+}
+
+// silentClearRound clears the current round's output without printing a footer.
+func (d *StreamDisplay) silentClearRound() {
+	d.cotAccumulated = ""
+	d.cotPrintedLen = 0
+	d.cotHeaderUp = false
+	d.cotDescription = ""
+	d.cotExplanation = ""
+	d.cotCategory = ""
+	d.cotStatus = ""
+	d.cotSources = nil
 }
 
 // updateCOTMetadata stores non-empty fields from a COT object.
@@ -638,6 +731,12 @@ func (d *StreamDisplay) onCOTFullText(cot cotJSON) {
 	} else {
 		// Same round — update metadata (status, sources may update mid-round)
 		d.updateCOTMetadata(cot)
+	}
+
+	// Don't print trivial/placeholder content ("In progress...", etc).
+	// Just update metadata silently — real content will print when it arrives.
+	if isTrivialContent(fullText) {
+		return
 	}
 
 	// Print any new text beyond what we've already printed
