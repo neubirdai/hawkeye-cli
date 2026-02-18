@@ -733,6 +733,12 @@ func (d *StreamDisplay) onCOTFullText(cot cotJSON) {
 		d.updateCOTMetadata(cot)
 	}
 
+	// Show the step header as soon as we have a description/explanation,
+	// even if the investigation text is still trivial/empty.
+	if d.cotDescription != "" || d.cotExplanation != "" {
+		d.ensureHeader()
+	}
+
 	// Don't print trivial/placeholder content ("In progress...", etc).
 	// Just update metadata silently — real content will print when it arrives.
 	if isTrivialContent(fullText) {
