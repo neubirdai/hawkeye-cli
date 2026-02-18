@@ -207,13 +207,14 @@ func (d *StreamDisplay) handleProgress(parts []string) {
 	}
 
 	d.lastProgress = text
-	fmt.Printf("  ⟳ %s\n", text)
+	display := extractProgressDescription(text)
+	fmt.Printf("  ⟳ %s\n", display)
 }
 
 func (d *StreamDisplay) showActivity(text string) {
 	frame := spinnerFrames[d.spinnerIdx%len(spinnerFrames)]
 	d.spinnerIdx++
-	display := text
+	display := extractProgressDescription(text)
 	if len(display) > 70 {
 		display = display[:67] + "..."
 	}
@@ -230,6 +231,26 @@ func (d *StreamDisplay) clearActivity() {
 
 func isActivityOnly(text string) bool {
 	return strings.HasPrefix(text, "(")
+}
+
+// extractProgressDescription extracts only the meaningful description
+// from progress messages, stripping internal filter/stage names.
+// "SplitAnswer (Analyzing Telemetry)" → "Analyzing Telemetry"
+// "(Found 9 results)"                → "Found 9 results"
+// "Analyzing Telemetry"              → "Analyzing Telemetry"
+func extractProgressDescription(text string) string {
+	// Messages like "(Consulting logs and metrics)" — strip parens
+	if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") {
+		return text[1 : len(text)-1]
+	}
+	// Messages like "FilterName (Description)" — extract description
+	if idx := strings.Index(text, " ("); idx >= 0 {
+		rest := text[idx+2:]
+		if end := strings.LastIndex(rest, ")"); end >= 0 {
+			return rest[:end]
+		}
+	}
+	return text
 }
 
 func normalizeProgress(text string) string {

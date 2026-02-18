@@ -115,13 +115,13 @@ func (m *mdPrinter) colorizeLine(line string) string {
 		return ansiDim + "────────────────────────────────────────────────" + ansiReset
 	}
 
-	// Table separator rows: | --- | --- |
+	// Table separator rows: | --- | --- |  — dim the whole line
 	if strings.HasPrefix(trimmed, "|") && isTableSeparator(trimmed) {
 		return ansiDim + line + ansiReset
 	}
 
-	// Table header/data rows: colorize pipes dim, apply inline formatting to cells
-	if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
+	// Table header/data rows: keep pipes for alignment, apply inline formatting to cells
+	if strings.HasPrefix(trimmed, "|") && strings.Contains(trimmed, "|") {
 		return colorizeTableRow(line)
 	}
 
@@ -165,13 +165,15 @@ func colorizeInline(line string) string {
 	return line
 }
 
-// colorizeTableRow dims the pipe separators and applies inline formatting to cells.
+// colorizeTableRow applies inline formatting to cell contents while
+// preserving original pipe characters and spacing for alignment.
 func colorizeTableRow(line string) string {
+	// Split on pipe, format cell contents, rejoin with original pipe char
 	cells := strings.Split(line, "|")
 	var out strings.Builder
 	for i, cell := range cells {
 		if i > 0 {
-			out.WriteString(ansiDim + "│" + ansiReset)
+			out.WriteString(ansiDim + "|" + ansiReset)
 		}
 		out.WriteString(colorizeInline(cell))
 	}
