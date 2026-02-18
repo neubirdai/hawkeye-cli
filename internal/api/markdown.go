@@ -3,13 +3,13 @@ package api
 import "fmt"
 
 // mdPrinter handles streaming text output.
-// Currently a passthrough — colorization disabled for debugging.
+// Pure passthrough — prints text exactly as received.
 type mdPrinter struct {
 	lineBuffer  string
 	inCodeBlock bool
 }
 
-// printMarkdown prints text as-is (passthrough mode for debugging).
+// printMarkdown prints text as-is.
 func (m *mdPrinter) printMarkdown(text string) {
 	fmt.Print(text)
 }
@@ -17,7 +17,7 @@ func (m *mdPrinter) printMarkdown(text string) {
 // flush is a no-op in passthrough mode.
 func (m *mdPrinter) flush() {}
 
-// ANSI constants — kept so stream_display.go compiles if it references them.
+// ANSI constants for terminal styling.
 const (
 	ansiReset     = "\033[0m"
 	ansiBold      = "\033[1m"

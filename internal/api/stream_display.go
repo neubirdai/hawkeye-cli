@@ -23,10 +23,11 @@ type StreamDisplay struct {
 	activityUp   bool
 
 	// Background spinner: keeps animating during dead air
-	spinnerMu      sync.Mutex
-	activityText   string        // text currently shown on the spinner line
-	stopSpinner    chan struct{} // closed to stop the background ticker
-	spinnerRunning bool          // true when background goroutine is alive
+	spinnerMu        sync.Mutex
+	activityText     string        // text currently shown on the spinner line
+	stopSpinner      chan struct{} // closed to stop the background ticker
+	spinnerRunning   bool          // true when background goroutine is alive
+	contentStreaming  bool          // true while COT/chat text is being printed — spinner pauses
 
 	// Source deduplication
 	seenSourceIDs  map[string]bool
@@ -292,7 +293,7 @@ func (d *StreamDisplay) runSpinnerLoop(stop chan struct{}) {
 			return
 		case <-ticker.C:
 			d.spinnerMu.Lock()
-			if d.activityUp {
+			if d.activityUp && !d.contentStreaming {
 				d.renderSpinnerFrame()
 			}
 			d.spinnerMu.Unlock()
@@ -655,12 +656,12 @@ func (d *StreamDisplay) ensureHeader() {
 
 	fmt.Println()
 
-	// Step number + category
+	// Step number + category — bold blue
 	cat := formatCOTCategory(d.cotCategory)
 	if cat != "" {
-		fmt.Printf("  🔍 Investigation step %d  [%s]\n", d.cotRound, cat)
+		fmt.Printf("  🔍 %s%sInvestigation step %d  [%s]%s\n", ansiBold, ansiBlue, d.cotRound, cat, ansiReset)
 	} else {
-		fmt.Printf("  🔍 Investigation step %d\n", d.cotRound)
+		fmt.Printf("  🔍 %s%sInvestigation step %d%s\n", ansiBold, ansiBlue, d.cotRound, ansiReset)
 	}
 
 	// Explanation (primary — the short summary shown in UI sidebar)
@@ -694,6 +695,11 @@ func (d *StreamDisplay) onCOTDelta(cot cotJSON) {
 
 	d.updateCOTMetadata(cot)
 	d.ensureHeader()
+
+	// Pause background spinner while we print content
+	d.spinnerMu.Lock()
+	d.contentStreaming = true
+	d.spinnerMu.Unlock()
 
 	if d.activityUp {
 		d.clearActivity()
@@ -749,6 +755,11 @@ func (d *StreamDisplay) onCOTFullText(cot cotJSON) {
 	if fullText != "" && fullLen > d.cotPrintedLen {
 		d.ensureHeader()
 
+		// Pause background spinner while we print content
+		d.spinnerMu.Lock()
+		d.contentStreaming = true
+		d.spinnerMu.Unlock()
+
 		if d.activityUp {
 			d.clearActivity()
 		}
@@ -797,6 +808,11 @@ func (d *StreamDisplay) endCOTRound() {
 	d.cotCategory = ""
 	d.cotStatus = ""
 	d.cotSources = nil
+
+	// Resume spinner
+	d.spinnerMu.Lock()
+	d.contentStreaming = false
+	d.spinnerMu.Unlock()
 }
 
 // formatCOTCategory returns a clean category label.
@@ -849,6 +865,10 @@ func (d *StreamDisplay) handleChatResponse(parts []string, meta *Metadata) {
 		if delta == "" {
 			return
 		}
+		// Pause background spinner while we print content
+		d.spinnerMu.Lock()
+		d.contentStreaming = true
+		d.spinnerMu.Unlock()
 		if d.activityUp {
 			d.clearActivity()
 		}
@@ -867,6 +887,10 @@ func (d *StreamDisplay) handleChatResponse(parts []string, meta *Metadata) {
 		}
 		if len(text) > d.chatPrintedLen {
 			newText := text[d.chatPrintedLen:]
+			// Pause background spinner while we print content
+			d.spinnerMu.Lock()
+			d.contentStreaming = true
+			d.spinnerMu.Unlock()
 			if d.activityUp {
 				d.clearActivity()
 			}
@@ -903,6 +927,11 @@ func (d *StreamDisplay) finishChatBlock() {
 	d.chatHeaderUp = false
 	d.chatPrintedLen = 0
 	d.chatAccumulated = ""
+
+	// Resume spinner
+	d.spinnerMu.Lock()
+	d.contentStreaming = false
+	d.spinnerMu.Unlock()
 }
 
 func stripHTML(s string) string {
