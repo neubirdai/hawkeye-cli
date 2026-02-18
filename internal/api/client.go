@@ -201,11 +201,31 @@ func newUUID() string {
 
 // --- Process Prompt (Streaming) ---
 
+// Metadata holds per-event metadata from the SSE payload.
+type Metadata struct {
+	IsDelta interface{} `json:"is_delta,omitempty"` // can be bool or string "true"
+}
+
+// IsDeltaTrue returns whether the metadata indicates a delta event.
+func (m *Metadata) IsDeltaTrue() bool {
+	if m == nil {
+		return false
+	}
+	switch v := m.IsDelta.(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
+}
+
 type Message struct {
-	ID      string   `json:"id,omitempty"`
-	Content *Content `json:"content,omitempty"`
-	Status  string   `json:"status,omitempty"`
-	EndTurn bool     `json:"end_turn,omitempty"`
+	ID       string    `json:"id,omitempty"`
+	Content  *Content  `json:"content,omitempty"`
+	Metadata *Metadata `json:"metadata,omitempty"`
+	Status   string    `json:"status,omitempty"`
+	EndTurn  bool      `json:"end_turn,omitempty"`
 }
 
 type Content struct {
@@ -231,6 +251,11 @@ type ProcessPromptResponse struct {
 	Message     *Message       `json:"message,omitempty"`
 	SessionUUID string         `json:"session_uuid,omitempty"`
 	Error       string         `json:"error,omitempty"`
+
+	// EventType is populated by the SSE parser from the "event:" field.
+	// Not part of JSON — set after parsing. Examples: "message", "cot_start",
+	// "cot_delta", "cot_end", "prompt_cycle_start", "prompt_cycle_end".
+	EventType string `json:"-"`
 }
 
 // StreamCallback is called for each streamed response chunk.
@@ -282,13 +307,38 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 	// 1 MB buffer for large streamed chunks (chain-of-thought can be huge)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
+	// Track the current SSE event type across lines.
+	// SSE format: "event: <type>" line followed by "data: <json>" line,
+	// then a blank line separator.
+	currentEventType := "message" // default per SSE spec
+
 	for scanner.Scan() {
 		line := scanner.Text()
-
-		// SSE format: lines starting with "data: " contain the JSON payload.
-		// Blank lines are event separators — skip them.
 		trimmed := strings.TrimSpace(line)
+
 		if trimmed == "" {
+			// Blank line = end of SSE event block.
+			// Reset event type to default for next event.
+			currentEventType = "message"
+			continue
+		}
+
+		// Capture SSE event type
+		if strings.HasPrefix(trimmed, "event:") {
+			currentEventType = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
+			if c.debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] event: %s\n", currentEventType)
+			}
+			continue
+		}
+
+		// Skip SSE comments and id/retry fields
+		if strings.HasPrefix(trimmed, ":") || strings.HasPrefix(trimmed, "id:") || strings.HasPrefix(trimmed, "retry:") {
+			continue
+		}
+
+		// Only process data lines
+		if !strings.HasPrefix(trimmed, "data:") {
 			continue
 		}
 
@@ -296,17 +346,12 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 		jsonStr := trimmed
 		if strings.HasPrefix(trimmed, "data: ") {
 			jsonStr = strings.TrimPrefix(trimmed, "data: ")
-		} else if strings.HasPrefix(trimmed, "data:") {
+		} else {
 			jsonStr = strings.TrimPrefix(trimmed, "data:")
 		}
 
-		// Skip SSE comments and other non-data fields
-		if strings.HasPrefix(trimmed, ":") || strings.HasPrefix(trimmed, "event:") || strings.HasPrefix(trimmed, "id:") || strings.HasPrefix(trimmed, "retry:") {
-			continue
-		}
-
 		jsonStr = strings.TrimSpace(jsonStr)
-		if jsonStr == "" || jsonStr == "[DONE]" {
+		if jsonStr == "" || jsonStr == "[DONE]" || jsonStr == ":keepalive" {
 			continue
 		}
 
@@ -317,18 +362,10 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 				Result *ProcessPromptResponse `json:"result"`
 			}
 			if err2 := json.Unmarshal([]byte(jsonStr), &envelope); err2 == nil && envelope.Result != nil {
+				envelope.Result.EventType = currentEventType
 				cb(envelope.Result)
 				if c.debug && envelope.Result.Message != nil && envelope.Result.Message.Content != nil {
-					ct := envelope.Result.Message.Content.ContentType
-					partSnippet := ""
-					if len(envelope.Result.Message.Content.Parts) > 0 {
-						p := envelope.Result.Message.Content.Parts[0]
-						if len(p) > 120 {
-							p = p[:120] + "..."
-						}
-						partSnippet = p
-					}
-					fmt.Fprintf(os.Stderr, "[DEBUG] %s | %s\n", ct, partSnippet)
+					c.debugLog(currentEventType, envelope.Result)
 				}
 				if envelope.Result.Message != nil && envelope.Result.Message.EndTurn {
 					return nil
@@ -336,21 +373,20 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 				continue
 			}
 			// Skip unparseable lines
+			if c.debug {
+				snippet := jsonStr
+				if len(snippet) > 80 {
+					snippet = snippet[:80] + "..."
+				}
+				fmt.Fprintf(os.Stderr, "[DEBUG] unparseable: %s\n", snippet)
+			}
 			continue
 		}
 
+		streamResp.EventType = currentEventType
 		cb(&streamResp)
 		if c.debug && streamResp.Message != nil && streamResp.Message.Content != nil {
-			ct := streamResp.Message.Content.ContentType
-			partSnippet := ""
-			if len(streamResp.Message.Content.Parts) > 0 {
-				p := streamResp.Message.Content.Parts[0]
-				if len(p) > 120 {
-					p = p[:120] + "..."
-				}
-				partSnippet = p
-			}
-			fmt.Fprintf(os.Stderr, "[DEBUG] %s | %s\n", ct, partSnippet)
+			c.debugLog(currentEventType, &streamResp)
 		}
 		if streamResp.Message != nil && streamResp.Message.EndTurn {
 			return nil
@@ -358,6 +394,24 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 	}
 
 	return scanner.Err()
+}
+
+// debugLog prints a compact debug line for an SSE event.
+func (c *Client) debugLog(eventType string, resp *ProcessPromptResponse) {
+	ct := resp.Message.Content.ContentType
+	isDelta := ""
+	if resp.Message.Metadata != nil && resp.Message.Metadata.IsDeltaTrue() {
+		isDelta = " [delta]"
+	}
+	partSnippet := ""
+	if len(resp.Message.Content.Parts) > 0 {
+		p := resp.Message.Content.Parts[0]
+		if len(p) > 120 {
+			p = p[:120] + "..."
+		}
+		partSnippet = p
+	}
+	fmt.Fprintf(os.Stderr, "[DEBUG] evt=%-16s ct=%-40s%s | %s\n", eventType, ct, isDelta, partSnippet)
 }
 
 // --- Session List ---
@@ -407,14 +461,14 @@ func (c *Client) SessionList(projectUUID string, limit int) (*SessionListRespons
 // --- Session Inspect ---
 
 type PromptCycle struct {
-	ID                  string           `json:"id"`
-	CreateTime          string           `json:"create_time"`
-	FinalAnswer         string           `json:"final_answer"`
-	Rating              string           `json:"rating"`
-	FollowUpSuggestions []string         `json:"follow_up_suggestions"`
-	Sources             []Source         `json:"sources"`
-	ChainOfThoughts     []ChainOfThought `json:"chain_of_thoughts"`
-	Status              string           `json:"status"`
+	ID                  string               `json:"id"`
+	CreateTime          string               `json:"create_time"`
+	FinalAnswer         string               `json:"final_answer"`
+	Rating              string               `json:"rating"`
+	FollowUpSuggestions []string             `json:"follow_up_suggestions"`
+	Sources             []Source             `json:"sources"`
+	ChainOfThoughts     []ChainOfThought     `json:"chain_of_thoughts"`
+	Status              string               `json:"status"`
 	Request             *ProcessPromptRequest `json:"request,omitempty"`
 }
 
