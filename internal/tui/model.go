@@ -609,7 +609,8 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		return tea.Println(dimStyle.Render("  📛 " + msg.text))
 
 	case "CONTENT_TYPE_ERROR_MESSAGE":
-		return tea.Println(errorMsgStyle.Render("  ✗ " + msg.text))
+		// Suppressed: these are internal query retry/fix messages (e.g. SQL errors),
+		// not meant for display. The web UI also ignores them.
 
 	case "CONTENT_TYPE_EXECUTION_TIME":
 		return tea.Println(dimStyle.Render("  ⏱  " + msg.text))
