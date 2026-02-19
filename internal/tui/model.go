@@ -489,40 +489,71 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		}
 
 	case "CONTENT_TYPE_CHAIN_OF_THOUGHT":
-		desc, explanation, investigation, _ := parseCOTFields(msg.text)
-		cotID := desc
+		id, desc, explanation, investigation, _ := parseCOTFields(msg.text)
+		cotID := id
+		if cotID == "" {
+			cotID = desc
+		}
 		if cotID == "" {
 			cotID = "_default"
 		}
 
 		var printCmds []tea.Cmd
 
-		if !m.cotDescShown[cotID] && desc != "" {
-			m.cotDescShown[cotID] = true
-			printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
-			if explanation != "" {
-				printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+explanation)))
+		// Helper: show header if not yet shown for this COT
+		showHeader := func() {
+			if !m.cotDescShown[cotID] && desc != "" {
+				m.cotDescShown[cotID] = true
+				printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
+				if explanation != "" {
+					printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+explanation)))
+				}
 			}
 		}
 
-		if investigation != "" {
-			prev := m.cotAccum[cotID]
-			if len(investigation) > len(prev) {
-				newText := investigation[len(prev):]
-				m.cotAccum[cotID] = investigation
-				// Print new lines from the COT investigation
-				combined := m.getCOTBuffer(cotID) + newText
-				lines := strings.Split(combined, "\n")
-				for i, line := range lines {
-					if i < len(lines)-1 {
-						// Complete line — print it
-						if strings.TrimSpace(line) != "" {
-							printCmds = append(printCmds, tea.Println("    "+line))
-						}
-					} else {
-						// Partial last line — buffer it
-						m.setCOTBuffer(cotID, line)
+		// Helper: print text line-by-line with buffering for partial lines
+		printLines := func(text string) {
+			combined := m.getCOTBuffer(cotID) + text
+			lines := strings.Split(combined, "\n")
+			for i, line := range lines {
+				if i < len(lines)-1 {
+					if strings.TrimSpace(line) != "" {
+						printCmds = append(printCmds, tea.Println("    "+line))
 					}
+				} else {
+					m.setCOTBuffer(cotID, line)
+				}
+			}
+		}
+
+		switch msg.eventType {
+		case "cot_start":
+			showHeader()
+
+		case "cot_delta":
+			showHeader()
+			// Delta mode: investigation IS the new text to append
+			if investigation != "" {
+				printLines(investigation)
+			}
+
+		case "cot_end":
+			// Flush remaining buffer for this COT
+			buf := m.getCOTBuffer(cotID)
+			if buf != "" && strings.TrimSpace(buf) != "" {
+				printCmds = append(printCmds, tea.Println("    "+buf))
+				m.setCOTBuffer(cotID, "")
+			}
+
+		default:
+			// Legacy non-delta: investigation contains full accumulated text
+			showHeader()
+			if investigation != "" {
+				prev := m.cotAccum[cotID]
+				if len(investigation) > len(prev) {
+					newText := investigation[len(prev):]
+					m.cotAccum[cotID] = investigation
+					printLines(newText)
 				}
 			}
 		}

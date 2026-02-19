@@ -18,6 +18,7 @@ type sessionCreatedMsg struct {
 
 type streamChunkMsg struct {
 	contentType string
+	eventType   string
 	text        string
 	raw         *api.ProcessPromptResponse
 }
@@ -85,8 +86,18 @@ func beginStream(client *api.Client, projectID, sessionID, prompt string) tea.Cm
 				}
 
 			case "CONTENT_TYPE_CHAIN_OF_THOUGHT":
-				if len(parts) > 0 {
-					ch <- streamChunkMsg{contentType: ct, text: parts[0], raw: resp}
+				et := resp.EventType
+				switch et {
+				case "cot_start", "cot_delta", "cot_end":
+					// Delta protocol: parts[0] is the active COT
+					if len(parts) > 0 {
+						ch <- streamChunkMsg{contentType: ct, eventType: et, text: parts[0], raw: resp}
+					}
+				default:
+					// Legacy: all COT steps are in parts[], send each
+					for _, raw := range parts {
+						ch <- streamChunkMsg{contentType: ct, eventType: et, text: raw, raw: resp}
+					}
 				}
 
 			case "CONTENT_TYPE_CHAT_RESPONSE":
@@ -179,8 +190,9 @@ func parseSourceLabel(raw string) string {
 }
 
 // parseCOTInvestigation extracts the investigation text from COT JSON.
-func parseCOTFields(raw string) (description, explanation, investigation, status string) {
+func parseCOTFields(raw string) (id, description, explanation, investigation, status string) {
 	var cot struct {
+		ID            string `json:"id"`
 		Description   string `json:"description"`
 		Explanation   string `json:"explanation"`
 		Investigation string `json:"investigation"`
@@ -188,11 +200,11 @@ func parseCOTFields(raw string) (description, explanation, investigation, status
 		CotStatus     string `json:"cot_status"`
 	}
 	if err := json.Unmarshal([]byte(raw), &cot); err != nil {
-		return "", "", raw, ""
+		return "", "", "", raw, ""
 	}
 	st := cot.CotStatus
 	if st == "" {
 		st = cot.Status
 	}
-	return cot.Description, cot.Explanation, cot.Investigation, st
+	return cot.ID, cot.Description, cot.Explanation, cot.Investigation, st
 }
