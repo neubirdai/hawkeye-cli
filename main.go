@@ -573,14 +573,14 @@ func cmdInspect(args []string) error {
 				fmt.Printf("    %s[%s]%s %s\n", display.Bold, category, display.Reset, status)
 
 				if cot.Description != "" {
-					for _, line := range wrapText(cot.Description, 72) {
+					for _, line := range strings.Split(api.RenderMarkdown(cot.Description), "\n") {
 						fmt.Printf("      %s\n", line)
 					}
 				}
 
 				if cot.Investigation != "" {
 					fmt.Printf("      %sInvestigation:%s\n", display.Dim, display.Reset)
-					for _, line := range wrapText(cot.Investigation, 72) {
+					for _, line := range strings.Split(api.RenderMarkdown(cot.Investigation), "\n") {
 						fmt.Printf("        %s\n", line)
 					}
 				}
@@ -618,7 +618,7 @@ func cmdInspect(args []string) error {
 		// Final Answer
 		if pc.FinalAnswer != "" {
 			fmt.Printf("\n  %s💬 Answer:%s\n", display.Green, display.Reset)
-			for _, line := range wrapText(pc.FinalAnswer, 76) {
+			for _, line := range strings.Split(api.RenderMarkdown(pc.FinalAnswer), "\n") {
 				fmt.Printf("    %s\n", line)
 			}
 		}
@@ -680,13 +680,13 @@ func cmdSummary(args []string) error {
 	if summary.ShortSummary != nil {
 		if summary.ShortSummary.Question != "" {
 			fmt.Printf("\n  %sQuestion:%s\n", display.Dim, display.Reset)
-			for _, line := range wrapText(summary.ShortSummary.Question, 76) {
+			for _, line := range strings.Split(api.RenderMarkdown(summary.ShortSummary.Question), "\n") {
 				fmt.Printf("    %s\n", line)
 			}
 		}
 		if summary.ShortSummary.Analysis != "" {
 			fmt.Printf("\n  %sQuick Analysis:%s\n", display.Dim, display.Reset)
-			for _, line := range wrapText(summary.ShortSummary.Analysis, 76) {
+			for _, line := range strings.Split(api.RenderMarkdown(summary.ShortSummary.Analysis), "\n") {
 				fmt.Printf("    %s\n", line)
 			}
 		}
@@ -694,7 +694,7 @@ func cmdSummary(args []string) error {
 
 	if summary.Analysis != "" {
 		fmt.Printf("\n  %s📋 Full Analysis:%s\n", display.Green, display.Reset)
-		for _, line := range wrapText(summary.Analysis, 76) {
+		for _, line := range strings.Split(api.RenderMarkdown(summary.Analysis), "\n") {
 			fmt.Printf("    %s\n", line)
 		}
 	}
