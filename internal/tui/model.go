@@ -35,6 +35,7 @@ type slashCmd struct {
 var slashCommands = []slashCmd{
 	{"/clear", "Clear the screen"},
 	{"/config", "Show current configuration"},
+	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
 	{"/inspect", "View session details"},
 	{"/login", "Login to a Hawkeye server"},
@@ -325,6 +326,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case summaryResultMsg:
 		return m.handleSummaryResult(msg)
+
+	case feedbackResultMsg:
+		return m.handleFeedbackResult(msg)
 	}
 
 	// Update sub-components
