@@ -502,7 +502,9 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 
 		var printCmds []tea.Cmd
 
-		// Helper: show header if not yet shown for this COT
+		// Helper: show header if not yet shown for this COT.
+		// Explanation (short summary) is the bold header line;
+		// Description (detailed scope) is the dim detail beneath.
 		showHeader := func() {
 			if !m.cotDescShown[cotID] && desc != "" {
 				m.cotDescShown[cotID] = true
