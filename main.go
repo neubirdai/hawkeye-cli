@@ -291,6 +291,12 @@ func cmdConfig() error {
 		token = cfg.Token[:end] + "..."
 	}
 	display.Info("Token:", token)
+
+	session := cfg.LastSession
+	if session == "" {
+		session = display.Dim + "(none)" + display.Reset
+	}
+	display.Info("Last Session:", session)
 	fmt.Println()
 
 	return nil
@@ -356,6 +362,9 @@ func cmdInvestigate(args []string) error {
 		fmt.Println()
 		display.Success(fmt.Sprintf("Continuing session: %s", sessionUUID))
 	}
+
+	cfg.LastSession = sessionUUID
+	_ = cfg.Save()
 
 	fmt.Printf("\n %s── 🦅 Hawkeye Investigation ──────────────────────────────────────────────%s\n", display.Dim, display.Reset)
 	fmt.Println()
@@ -526,11 +535,6 @@ func cmdSessions(args []string) error {
 // ─── inspect ────────────────────────────────────────────────────────────────
 
 func cmdInspect(args []string) error {
-	if len(args) == 0 {
-		fmt.Println("Usage: hawkeye inspect <session-uuid>")
-		return nil
-	}
-
 	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
@@ -539,8 +543,17 @@ func cmdInspect(args []string) error {
 		return err
 	}
 
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if cfg.LastSession != "" {
+		sessionUUID = cfg.LastSession
+	} else {
+		fmt.Println("Usage: hawkeye inspect [session-uuid]")
+		return nil
+	}
+
 	client := api.NewClient(cfg)
-	sessionUUID := args[0]
 
 	resp, err := client.SessionInspect(cfg.ProjectID, sessionUUID)
 	if err != nil {
@@ -666,11 +679,6 @@ func cmdInspect(args []string) error {
 // ─── summary ────────────────────────────────────────────────────────────────
 
 func cmdSummary(args []string) error {
-	if len(args) == 0 {
-		fmt.Println("Usage: hawkeye summary <session-uuid>")
-		return nil
-	}
-
 	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
@@ -679,8 +687,17 @@ func cmdSummary(args []string) error {
 		return err
 	}
 
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if cfg.LastSession != "" {
+		sessionUUID = cfg.LastSession
+	} else {
+		fmt.Println("Usage: hawkeye summary [session-uuid]")
+		return nil
+	}
+
 	client := api.NewClient(cfg)
-	sessionUUID := args[0]
 
 	resp, err := client.GetSessionSummary(cfg.ProjectID, sessionUUID)
 	if err != nil {
@@ -931,8 +948,8 @@ func printUsage() {
 %sSessions:%s
   sessions                  List recent investigation sessions
     -n, --limit <count>     Number of sessions to list (default: 20)
-  inspect <session-uuid>    View session details with chain-of-thought
-  summary <session-uuid>    Get executive summary with action items
+  inspect [session-uuid]    View session details (defaults to last session)
+  summary [session-uuid]    Get executive summary (defaults to last session)
 
 %sLibrary:%s
   prompts                   Browse available investigation prompts

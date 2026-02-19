@@ -16,8 +16,9 @@ type Config struct {
 	Username  string `json:"username,omitempty"`
 	Token     string `json:"token,omitempty"`
 	OrgUUID   string `json:"org_uuid,omitempty"`
-	ProjectID string `json:"project_uuid,omitempty"`
-	Profile   string `json:"-"`
+	ProjectID   string `json:"project_uuid,omitempty"`
+	LastSession string `json:"last_session,omitempty"`
+	Profile     string `json:"-"`
 }
 
 func configPath(profile string) (string, error) {
