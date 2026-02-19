@@ -27,26 +27,23 @@ type StreamDisplay struct {
 	activityText     string        // text currently shown on the spinner line
 	stopSpinner      chan struct{} // closed to stop the background ticker
 	spinnerRunning   bool          // true when background goroutine is alive
-	contentStreaming  bool          // true while COT/chat text is being printed — spinner pauses
+	contentStreaming bool          // true while COT/chat text is being printed — spinner pauses
 
 	// Source deduplication
 	seenSourceIDs  map[string]bool
 	sourcesPrinted bool
 
-	// Error deduplication
-	seenErrors map[string]bool
-
 	// Chain-of-thought state.
 	// Server sends ALL COT steps in the parts[] array of every COT event.
 	// parts[0] = step 1, parts[1] = step 2, etc.  The CLI must find the
 	// IN_PROGRESS step and stream its investigation text.
-	cotRound       int    // step number (1-based)
-	cotAccumulated string // full investigation text for current round
-	cotPrintedLen  int    // how many chars we've printed
-	cotHeaderUp    bool   // true once the step header is printed
-	cotEverStarted bool   // true after first COT event
-	currentCotID   string // ID of the COT step we're currently displaying
-	cotSeparatorDone bool // true once the separator line after COT content is printed
+	cotRound         int    // step number (1-based)
+	cotAccumulated   string // full investigation text for current round
+	cotPrintedLen    int    // how many chars we've printed
+	cotHeaderUp      bool   // true once the step header is printed
+	cotEverStarted   bool   // true after first COT event
+	currentCotID     string // ID of the COT step we're currently displaying
+	cotSeparatorDone bool   // true once the separator line after COT content is printed
 
 	// Rich metadata for current round
 	cotDescription string
@@ -76,7 +73,6 @@ func NewStreamDisplay(debug bool) *StreamDisplay {
 		debug:         debug,
 		seenSourceIDs: make(map[string]bool),
 		seenProgress:  make(map[string]bool),
-		seenErrors:    make(map[string]bool),
 	}
 }
 
@@ -381,65 +377,6 @@ func normalizeProgress(text string) string {
 }
 
 // --- Error Messages ---
-
-// errorJSON matches the structure the server sends in ERROR_MESSAGE events.
-// Contains query SQL we do NOT want to display.
-type errorJSON struct {
-	Question string   `json:"question"`
-	Query    []string `json:"query"`
-	Error    string   `json:"error"`
-	Status   string   `json:"status"`
-}
-
-// handleErrorMessage parses error events and shows only the question + error,
-// NOT the raw SQL queries. Suppresses internal SQL retry errors entirely.
-func (d *StreamDisplay) handleErrorMessage(parts []string) {
-	for _, p := range parts {
-		// Try to parse as structured error JSON
-		var errObj errorJSON
-		if err := json.Unmarshal([]byte(p), &errObj); err == nil && errObj.Question != "" {
-			// Suppress internal SQL retry errors — these are noise from SQLFix filter
-			if isSQLRetryError(errObj.Error) {
-				continue
-			}
-
-			// Build display string for dedup check
-			errDisplay := errObj.Question
-			if errObj.Error != "" {
-				errDisplay += " — " + errObj.Error
-			}
-			if d.seenErrors[errDisplay] {
-				continue
-			}
-			d.seenErrors[errDisplay] = true
-
-			// Structured error — show question and error, suppress SQL
-			fmt.Printf("  ✗ %s", errObj.Question)
-			if errObj.Error != "" {
-				fmt.Printf(" — %s", errObj.Error)
-			}
-			if errObj.Status != "" && errObj.Status != "error" {
-				fmt.Printf(" (%s)", errObj.Status)
-			}
-			fmt.Println()
-			continue
-		}
-
-		// Plain text error — skip if it looks like raw JSON with queries or SQL errors
-		if strings.Contains(p, `"query"`) && strings.Contains(p, "SELECT ") {
-			continue
-		}
-		if isSQLRetryError(p) {
-			continue
-		}
-		if d.seenErrors[p] {
-			continue
-		}
-		d.seenErrors[p] = true
-
-		fmt.Printf("  ✗ %s\n", p)
-	}
-}
 
 // isSQLRetryError returns true for SQL-related errors that are internal
 // query retries (from SQLFix/SQLSplitExecute filters) and should not be
@@ -787,11 +724,7 @@ func (d *StreamDisplay) onCOTFullText(cot cotJSON) {
 	fullLen := len(fullText)
 
 	// Detect new round — primary signal is the COT ID changing.
-	isNewRound := false
-
-	if d.cotEverStarted && cot.ID != "" && cot.ID != d.currentCotID {
-		isNewRound = true
-	}
+	isNewRound := d.cotEverStarted && cot.ID != "" && cot.ID != d.currentCotID
 
 	// Fallback heuristics for when IDs aren't available
 	if !isNewRound && d.cotEverStarted && d.cotPrintedLen > 0 && fullLen > 0 && fullLen < d.cotPrintedLen {

@@ -343,7 +343,7 @@ func (c *Client) ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb
 		}
 
 		// Strip SSE "data: " prefix
-		jsonStr := trimmed
+		var jsonStr string
 		if strings.HasPrefix(trimmed, "data: ") {
 			jsonStr = strings.TrimPrefix(trimmed, "data: ")
 		} else {
@@ -465,14 +465,14 @@ func (c *Client) SessionList(projectUUID string, limit int) (*SessionListRespons
 // --- Session Inspect ---
 
 type PromptCycle struct {
-	ID                  string               `json:"id"`
-	CreateTime          string               `json:"create_time"`
-	FinalAnswer         string               `json:"final_answer"`
-	Rating              string               `json:"rating"`
-	FollowUpSuggestions []string             `json:"follow_up_suggestions"`
-	Sources             []Source             `json:"sources"`
-	ChainOfThoughts     []ChainOfThought     `json:"chain_of_thoughts"`
-	Status              string               `json:"status"`
+	ID                  string                `json:"id"`
+	CreateTime          string                `json:"create_time"`
+	FinalAnswer         string                `json:"final_answer"`
+	Rating              string                `json:"rating"`
+	FollowUpSuggestions []string              `json:"follow_up_suggestions"`
+	Sources             []Source              `json:"sources"`
+	ChainOfThoughts     []ChainOfThought      `json:"chain_of_thoughts"`
+	Status              string                `json:"status"`
 	Request             *ProcessPromptRequest `json:"request,omitempty"`
 }
 

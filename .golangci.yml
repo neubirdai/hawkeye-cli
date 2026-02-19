@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+  exclusions:
+    rules:
+      # CLI programs legitimately ignore fmt output errors
+      - linters:
+          - errcheck
+        source: "fmt\\."
+      # defer .Close() is standard Go — errors are rarely actionable
+      - linters:
+          - errcheck
+        source: "defer"
+
+formatters:
+  enable:
+    - gofmt

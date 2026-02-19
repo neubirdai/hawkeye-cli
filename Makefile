@@ -1,7 +1,7 @@
 BINARY=hawkeye
 VERSION=0.1.0
 
-.PHONY: build clean install
+.PHONY: build clean install test lint check
 
 build:
 	go build -ldflags="-s -w" -o $(BINARY) .
@@ -11,6 +11,14 @@ install: build
 
 clean:
 	rm -f $(BINARY)
+
+test:
+	go test ./... -count=1 -timeout 30s
+
+lint:
+	golangci-lint run ./...
+
+check: lint test
 
 # Cross-compile for common platforms
 release:

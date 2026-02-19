@@ -56,18 +56,18 @@ func ClearLine() {
 // Content type display for streaming
 func ContentTypeLabel(ct string) string {
 	labels := map[string]string{
-		"CONTENT_TYPE_PROGRESS_STATUS":      Yellow + "⟳ Progress" + Reset,
-		"CONTENT_TYPE_CHAT_RESPONSE":        Green + "💬 Response" + Reset,
-		"CONTENT_TYPE_CHAIN_OF_THOUGHT":     Magenta + "🧠 Thinking" + Reset,
-		"CONTENT_TYPE_SOURCES":              Blue + "📎 Sources" + Reset,
+		"CONTENT_TYPE_PROGRESS_STATUS":       Yellow + "⟳ Progress" + Reset,
+		"CONTENT_TYPE_CHAT_RESPONSE":         Green + "💬 Response" + Reset,
+		"CONTENT_TYPE_CHAIN_OF_THOUGHT":      Magenta + "🧠 Thinking" + Reset,
+		"CONTENT_TYPE_SOURCES":               Blue + "📎 Sources" + Reset,
 		"CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS": Cyan + "💡 Suggestions" + Reset,
-		"CONTENT_TYPE_VISUALIZATION":        Cyan + "📊 Visualization" + Reset,
-		"CONTENT_TYPE_SESSION_NAME":         Gray + "📋 Session" + Reset,
-		"CONTENT_TYPE_ERROR_MESSAGE":        Red + "❌ Error" + Reset,
-		"CONTENT_TYPE_DONE_INDICATOR":       Green + "✓ Done" + Reset,
-		"CONTENT_TYPE_EXECUTION_TIME":       Gray + "⏱  Time" + Reset,
-		"CONTENT_TYPE_ALTERNATE_QUESTIONS":  Cyan + "❓ Alternatives" + Reset,
-		"CONTENT_TYPE_MESSAGE":              White + "📨 Message" + Reset,
+		"CONTENT_TYPE_VISUALIZATION":         Cyan + "📊 Visualization" + Reset,
+		"CONTENT_TYPE_SESSION_NAME":          Gray + "📋 Session" + Reset,
+		"CONTENT_TYPE_ERROR_MESSAGE":         Red + "❌ Error" + Reset,
+		"CONTENT_TYPE_DONE_INDICATOR":        Green + "✓ Done" + Reset,
+		"CONTENT_TYPE_EXECUTION_TIME":        Gray + "⏱  Time" + Reset,
+		"CONTENT_TYPE_ALTERNATE_QUESTIONS":   Cyan + "❓ Alternatives" + Reset,
+		"CONTENT_TYPE_MESSAGE":               White + "📨 Message" + Reset,
 	}
 	if label, ok := labels[ct]; ok {
 		return label

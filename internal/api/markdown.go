@@ -4,10 +4,7 @@ import "fmt"
 
 // mdPrinter handles streaming text output.
 // Pure passthrough — prints text exactly as received.
-type mdPrinter struct {
-	lineBuffer  string
-	inCodeBlock bool
-}
+type mdPrinter struct{}
 
 // printMarkdown prints text as-is.
 func (m *mdPrinter) printMarkdown(text string) {
