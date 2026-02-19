@@ -567,7 +567,7 @@ func (d *StreamDisplay) handleChainOfThought(parts []string, eventType string, m
 // we reuse the step number instead of incrementing.
 func (d *StreamDisplay) startNewRound(cot cotJSON) {
 	if d.cotEverStarted {
-		prevWasTrivial := d.cotPrintedLen == 0 || isTrivialContent(d.cotAccumulated)
+		prevWasTrivial := !d.cotHeaderUp && (d.cotPrintedLen == 0 || isTrivialContent(d.cotAccumulated))
 
 		if d.cotPrintedLen > 0 && !prevWasTrivial {
 			d.endCOTRound()
