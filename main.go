@@ -10,6 +10,7 @@ import (
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
 	"hawkeye-cli/internal/display"
+	"hawkeye-cli/internal/tui"
 )
 
 const version = "0.1.0"
@@ -20,6 +21,15 @@ func main() {
 	if len(args) == 0 {
 		printUsage()
 		os.Exit(0)
+	}
+
+	// Interactive TUI mode
+	if args[0] == "-i" || args[0] == "--interactive" || args[0] == "interactive" {
+		if err := tui.Run(version); err != nil {
+			display.Error(err.Error())
+			os.Exit(1)
+		}
+		return
 	}
 
 	var err error
@@ -840,6 +850,7 @@ func printUsage() {
 	fmt.Printf(`%sHawkeye CLI%s — Neubird AI SRE Platform (v%s)
 
 %sUsage:%s
+  hawkeye -i                      Launch interactive mode (recommended)
   hawkeye <command> [arguments]
 
 %sGetting Started:%s
