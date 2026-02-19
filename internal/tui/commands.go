@@ -46,6 +46,8 @@ func (m model) dispatchCommand(input string) (tea.Model, tea.Cmd) {
 		return m.cmdInspect(args)
 	case "/summary":
 		return m.cmdSummary(args)
+	case "/feedback", "/td":
+		return m.cmdFeedback(args)
 	case "/prompts":
 		return m.cmdPrompts()
 	case "/config":
@@ -537,6 +539,64 @@ func (m model) handleSummaryResult(msg summaryResultMsg) (tea.Model, tea.Cmd) {
 
 	cmds = append(cmds, tea.Println(""))
 	return m, tea.Sequence(cmds...)
+}
+
+// ─── /feedback (/td) ────────────────────────────────────────────────────────
+
+type feedbackResultMsg struct {
+	err error
+}
+
+func (m model) cmdFeedback(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+
+	sessionUUID := ""
+	reason := "Thumbs down from CLI"
+
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "-r" || args[i] == "--reason") && i+1 < len(args) {
+			i++
+			reason = args[i]
+		} else if sessionUUID == "" {
+			sessionUUID = args[i]
+		}
+	}
+
+	if sessionUUID == "" {
+		sessionUUID = m.sessionID
+	}
+	if sessionUUID == "" {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /feedback [session-uuid] [-r reason]"))
+	}
+
+	client := m.client
+	projectID := m.cfg.ProjectID
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Submitting feedback for %s...", truncateUUID(sessionUUID)))),
+		func() tea.Msg {
+			resp, err := client.SessionInspect(projectID, sessionUUID)
+			if err != nil {
+				return feedbackResultMsg{err: err}
+			}
+			if len(resp.PromptCycle) == 0 {
+				return feedbackResultMsg{err: fmt.Errorf("no prompt cycles found")}
+			}
+			last := resp.PromptCycle[len(resp.PromptCycle)-1]
+			items := []api.RatingItemID{{ItemType: "ITEM_TYPE_PROMPT_CYCLE", ItemID: last.ID}}
+			err = client.PutRating(projectID, sessionUUID, items, "RATING_THUMBS_DOWN", reason)
+			return feedbackResultMsg{err: err}
+		},
+	)
+}
+
+func (m model) handleFeedbackResult(msg feedbackResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Feedback failed: %v", msg.err)))
+	}
+	return m, tea.Println(statusStyle.Render("  ✓ Thumbs down submitted"))
 }
 
 // ─── /prompts ───────────────────────────────────────────────────────────────
