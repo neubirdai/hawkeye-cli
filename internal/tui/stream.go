@@ -179,19 +179,20 @@ func parseSourceLabel(raw string) string {
 }
 
 // parseCOTInvestigation extracts the investigation text from COT JSON.
-func parseCOTFields(raw string) (description, investigation, status string) {
+func parseCOTFields(raw string) (description, explanation, investigation, status string) {
 	var cot struct {
 		Description   string `json:"description"`
+		Explanation   string `json:"explanation"`
 		Investigation string `json:"investigation"`
 		Status        string `json:"status"`
 		CotStatus     string `json:"cot_status"`
 	}
 	if err := json.Unmarshal([]byte(raw), &cot); err != nil {
-		return "", raw, ""
+		return "", "", raw, ""
 	}
 	st := cot.CotStatus
 	if st == "" {
 		st = cot.Status
 	}
-	return cot.Description, cot.Investigation, st
+	return cot.Description, cot.Explanation, cot.Investigation, st
 }

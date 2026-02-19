@@ -475,10 +475,10 @@ func (m *model) resetStreamState() {
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	switch msg.contentType {
 	case "CONTENT_TYPE_PROGRESS_STATUS":
-		key := msg.text
-		if !m.seenProgress[key] {
-			m.seenProgress[key] = true
-			return tea.Println(statusStyle.Render("  ⟳ " + msg.text))
+		display := extractProgressDisplay(msg.text)
+		if !m.seenProgress[display] {
+			m.seenProgress[display] = true
+			return tea.Println(statusStyle.Render("  ⟳ " + display))
 		}
 
 	case "CONTENT_TYPE_SOURCES":
@@ -489,7 +489,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		}
 
 	case "CONTENT_TYPE_CHAIN_OF_THOUGHT":
-		desc, investigation, _ := parseCOTFields(msg.text)
+		desc, explanation, investigation, _ := parseCOTFields(msg.text)
 		cotID := desc
 		if cotID == "" {
 			cotID = "_default"
@@ -500,6 +500,9 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		if !m.cotDescShown[cotID] && desc != "" {
 			m.cotDescShown[cotID] = true
 			printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
+			if explanation != "" {
+				printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+explanation)))
+			}
 		}
 
 		if investigation != "" {
@@ -514,7 +517,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 					if i < len(lines)-1 {
 						// Complete line — print it
 						if strings.TrimSpace(line) != "" {
-							printCmds = append(printCmds, tea.Println(dimStyle.Render("    "+line)))
+							printCmds = append(printCmds, tea.Println("    "+line))
 						}
 					} else {
 						// Partial last line — buffer it
@@ -619,4 +622,15 @@ func truncateUUID(s string) string {
 		return s[:8] + "..." + s[len(s)-4:]
 	}
 	return s
+}
+
+// extractProgressDisplay pulls out just the parenthetical description
+// from progress text like "PromptGate (Preparing Telemetry Sources)".
+func extractProgressDisplay(text string) string {
+	if i := strings.Index(text, "("); i >= 0 {
+		if j := strings.LastIndex(text, ")"); j > i {
+			return text[i+1 : j]
+		}
+	}
+	return text
 }
