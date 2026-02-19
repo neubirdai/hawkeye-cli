@@ -15,6 +15,8 @@ import (
 
 const version = "0.1.0"
 
+var activeProfile string
+
 func main() {
 	args := os.Args[1:]
 
@@ -23,9 +25,15 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Interactive TUI mode
+	args = parseGlobalFlags(args)
+
+	if len(args) == 0 {
+		printUsage()
+		os.Exit(0)
+	}
+
 	if args[0] == "-i" || args[0] == "--interactive" || args[0] == "interactive" {
-		if err := tui.Run(version); err != nil {
+		if err := tui.Run(version, activeProfile); err != nil {
 			display.Error(err.Error())
 			os.Exit(1)
 		}
@@ -53,6 +61,8 @@ func main() {
 		err = cmdPrompts()
 	case "projects":
 		err = cmdProjects()
+	case "profiles":
+		err = cmdProfiles()
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version", "-v":
@@ -146,7 +156,7 @@ func cmdLogin(args []string) error {
 	display.ClearLine()
 	display.Success("Authenticated successfully")
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -175,15 +185,20 @@ func cmdLogin(args []string) error {
 		display.Info("Organization:", cfg.OrgUUID)
 	}
 
+	pf := ""
+	if activeProfile != "" {
+		pf = " --profile " + activeProfile
+	}
+
 	fmt.Println()
 	if cfg.ProjectID == "" {
-		fmt.Printf("  %sNext:%s Run %shawkeye set project <uuid>%s to set your project.\n\n",
-			display.Dim, display.Reset, display.Cyan, display.Reset)
+		fmt.Printf("  %sNext:%s Run %shawkeye%s set project <uuid>%s to set your project.\n\n",
+			display.Dim, display.Reset, display.Cyan, pf, display.Reset)
 	} else {
 		fmt.Printf("  %sReady!%s Project is already set to %s.\n",
 			display.Dim, display.Reset, cfg.ProjectID)
-		fmt.Printf("  %sNext:%s Run %shawkeye investigate \"<question>\"%s to start.\n\n",
-			display.Dim, display.Reset, display.Cyan, display.Reset)
+		fmt.Printf("  %sNext:%s Run %shawkeye%s investigate \"<question>\"%s to start.\n\n",
+			display.Dim, display.Reset, display.Cyan, pf, display.Reset)
 	}
 
 	return nil
@@ -203,7 +218,7 @@ func cmdSet(args []string) error {
 		return nil
 	}
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -234,12 +249,14 @@ func cmdSet(args []string) error {
 // ─── config ─────────────────────────────────────────────────────────────────
 
 func cmdConfig() error {
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
 
 	display.Header("Hawkeye CLI Configuration")
+
+	display.Info("Profile:", config.ProfileName(activeProfile))
 
 	server := cfg.Server
 	if server == "" {
@@ -312,7 +329,7 @@ func cmdInvestigate(args []string) error {
 	}
 	prompt := strings.Join(positional, " ")
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -451,7 +468,7 @@ func cmdSessions(args []string) error {
 		}
 	}
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -514,7 +531,7 @@ func cmdInspect(args []string) error {
 		return nil
 	}
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -654,7 +671,7 @@ func cmdSummary(args []string) error {
 		return nil
 	}
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -723,7 +740,7 @@ func cmdSummary(args []string) error {
 // ─── prompts ────────────────────────────────────────────────────────────────
 
 func cmdPrompts() error {
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -765,7 +782,7 @@ func cmdPrompts() error {
 // ─── projects ───────────────────────────────────────────────────────────────
 
 func cmdProjects() error {
-	cfg, err := config.Load()
+	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
 	}
@@ -809,6 +826,33 @@ func cmdProjects() error {
 	return nil
 }
 
+// ─── profiles ───────────────────────────────────────────────────────────────
+
+func cmdProfiles() error {
+	profiles, err := config.ListProfiles()
+	if err != nil {
+		return err
+	}
+
+	display.Header(fmt.Sprintf("Profiles (%d)", len(profiles)))
+
+	if len(profiles) == 0 {
+		display.Warn("No profiles found.")
+		return nil
+	}
+
+	for _, p := range profiles {
+		marker := " "
+		if p == config.ProfileName(activeProfile) {
+			marker = display.Green + "●" + display.Reset
+		}
+		fmt.Printf("  %s %s\n", marker, p)
+	}
+	fmt.Println()
+
+	return nil
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 func wrapText(text string, width int) []string {
@@ -837,6 +881,21 @@ func wrapText(text string, width int) []string {
 	return lines
 }
 
+func parseGlobalFlags(args []string) []string {
+	var remaining []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--profile" {
+			if i+1 < len(args) {
+				i++
+				activeProfile = args[i]
+			}
+			continue
+		}
+		remaining = append(remaining, args[i])
+	}
+	return remaining
+}
+
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -850,8 +909,8 @@ func printUsage() {
 	fmt.Printf(`%sHawkeye CLI%s — Neubird AI SRE Platform (v%s)
 
 %sUsage:%s
-  hawkeye -i                      Launch interactive mode (recommended)
-  hawkeye <command> [arguments]
+  hawkeye [--profile <name>] -i                      Launch interactive mode (recommended)
+  hawkeye [--profile <name>] <command> [arguments]
 
 %sGetting Started:%s
   login <url> -u <user> -p <pass>  Authenticate (URL = frontend address)
@@ -878,15 +937,22 @@ func printUsage() {
 %sLibrary:%s
   prompts                   Browse available investigation prompts
 
+%sProfiles:%s
+  profiles                    List all config profiles
+  --profile <name>            Use a named config profile (default: unnamed)
+
 %sExamples:%s
-  hawkeye login https://littlebird.app.neubird.ai/ -u admin@company.com -p secret
+  hawkeye login https://myenv.app.neubird.ai/ -u admin@company.com -p secret
   hawkeye set project 66520f61-6a43-48ac-8286-a7e7cf9755c5
   hawkeye investigate "Why is the API returning 500 errors?"
   hawkeye investigate "Check DB connections" -s <session-uuid>
   hawkeye sessions
   hawkeye inspect <session-uuid>
+  hawkeye --profile staging login https://myenv.app.neubird.ai/ -u user -p pass
+  hawkeye --profile staging investigate "Check API errors"
 
 `, display.Bold, display.Reset, version,
+		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,

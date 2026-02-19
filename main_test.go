@@ -68,6 +68,59 @@ func TestWrapText(t *testing.T) {
 	}
 }
 
+func TestParseGlobalFlags(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantProfile string
+		wantArgs    []string
+	}{
+		{
+			name:        "no flags",
+			args:        []string{"login", "url"},
+			wantProfile: "",
+			wantArgs:    []string{"login", "url"},
+		},
+		{
+			name:        "profile before command",
+			args:        []string{"--profile", "staging", "login"},
+			wantProfile: "staging",
+			wantArgs:    []string{"login"},
+		},
+		{
+			name:        "profile after command",
+			args:        []string{"config", "--profile", "prod"},
+			wantProfile: "prod",
+			wantArgs:    []string{"config"},
+		},
+		{
+			name:        "profile with extra args",
+			args:        []string{"--profile", "dev", "set", "server", "http://localhost"},
+			wantProfile: "dev",
+			wantArgs:    []string{"set", "server", "http://localhost"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			activeProfile = ""
+			got := parseGlobalFlags(tt.args)
+			if activeProfile != tt.wantProfile {
+				t.Errorf("activeProfile = %q, want %q", activeProfile, tt.wantProfile)
+			}
+			if len(got) != len(tt.wantArgs) {
+				t.Errorf("remaining args = %v, want %v", got, tt.wantArgs)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.wantArgs[i] {
+					t.Errorf("arg[%d] = %q, want %q", i, got[i], tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	tests := []struct {
 		name string

@@ -149,16 +149,15 @@ func (m model) handleLoginPassSubmit(value string) (tea.Model, tea.Cmd) {
 
 	serverURL := m.loginURL
 	username := m.loginUser
+	profile := m.profile
 
 	return m, tea.Sequence(
 		tea.Println(statusStyle.Render("  ⟳ Authenticating...")),
 		func() tea.Msg {
 			client := api.NewClientWithServer(serverURL)
 
-			// Try to resolve backend URL from frontend
 			backendURL, err := api.ResolveBackendURL(serverURL)
 			if err != nil {
-				// Fall back to using URL directly
 				backendURL = strings.TrimRight(serverURL, "/")
 			} else {
 				client = api.NewClientWithServer(backendURL)
@@ -169,7 +168,7 @@ func (m model) handleLoginPassSubmit(value string) (tea.Model, tea.Cmd) {
 				return loginResultMsg{err: fmt.Errorf("authentication failed: %w", err)}
 			}
 
-			cfg, err := config.Load()
+			cfg, err := config.Load(profile)
 			if err != nil {
 				return loginResultMsg{err: err}
 			}
@@ -249,6 +248,7 @@ func (m model) cmdConfig() (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(
 		tea.Println(""),
 		tea.Println(dimStyle.Render("  Configuration:")),
+		tea.Println(fmt.Sprintf("    Profile:      %s", config.ProfileName(m.profile))),
 		tea.Println(fmt.Sprintf("    Server:       %s", val(m.cfg.Server))),
 		tea.Println(fmt.Sprintf("    User:         %s", val(m.cfg.Username))),
 		tea.Println(fmt.Sprintf("    Project:      %s", val(m.cfg.ProjectID))),

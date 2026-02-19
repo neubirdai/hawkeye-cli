@@ -83,9 +83,10 @@ type model struct {
 	cmdMenuIdx   int  // selected index in command menu (-1 = none)
 	cmdMenuOpen  bool // whether the command menu is visible
 	lastInputVal string // track input changes to reset menu index
+	profile      string
 }
 
-func initialModel(version string) model {
+func initialModel(version, profile string) model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question or type /help..."
 	ti.Focus()
@@ -98,7 +99,7 @@ func initialModel(version string) model {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colorOrange)
 
-	cfg, _ := config.Load()
+	cfg, _ := config.Load(profile)
 
 	var client *api.Client
 	if cfg != nil && cfg.Server != "" && cfg.Token != "" {
@@ -109,6 +110,7 @@ func initialModel(version string) model {
 		input:        ti,
 		spinner:      sp,
 		version:      version,
+		profile:      profile,
 		cfg:          cfg,
 		client:       client,
 		mode:         modeIdle,
