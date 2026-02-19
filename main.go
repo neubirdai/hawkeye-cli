@@ -49,7 +49,7 @@ func main() {
 		err = cmdSet(args[1:])
 	case "config":
 		err = cmdConfig()
-	case "investigate":
+	case "investigate", "ask":
 		err = cmdInvestigate(args[1:])
 	case "sessions":
 		err = cmdSessions(args[1:])
@@ -880,7 +880,7 @@ func printUsage() {
   set org <uuid>            Set the organization UUID
 
 %sInvestigation:%s
-  investigate "<question>"  Run an AI-powered investigation (streams output)
+  investigate|ask "<question>"  Run an AI-powered investigation (streams output)
     -s, --session <uuid>    Continue in an existing session
 
 %sSessions:%s
