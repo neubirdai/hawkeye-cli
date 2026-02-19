@@ -4,6 +4,19 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/charmbracelet/glamour"
+)
+
+const (
+	ansiReset     = "\033[0m"
+	ansiBold      = "\033[1m"
+	ansiDim       = "\033[2m"
+	ansiItalic    = "\033[3m"
+	ansiUnderline = "\033[4m"
+	ansiCyan      = "\033[36m"
+	ansiBlue      = "\033[34m"
+	ansiBoldCyan  = "\033[1;36m"
 )
 
 var htmlTagRe2 = regexp.MustCompile(`<[^>]+>`)
@@ -14,23 +27,6 @@ func cleanHTML(s string) string {
 	s = strings.ReplaceAll(s, "<br />", "\n")
 	return htmlTagRe2.ReplaceAllString(s, "")
 }
-
-const (
-	ansiReset     = "\033[0m"
-	ansiBold      = "\033[1m"
-	ansiDim       = "\033[2m"
-	ansiItalic    = "\033[3m"
-	ansiUnderline = "\033[4m"
-	ansiCyan      = "\033[36m"
-	ansiGreen     = "\033[32m"
-	ansiYellow    = "\033[33m"
-	ansiBlue      = "\033[34m"
-	ansiMagenta   = "\033[35m"
-	ansiWhite     = "\033[37m"
-	ansiBoldCyan  = "\033[1;36m"
-	ansiBoldGreen = "\033[1;32m"
-	ansiGray      = "\033[90m"
-)
 
 type mdPrinter struct {
 	buf    string
@@ -85,10 +81,10 @@ func (m *mdPrinter) renderLine(line string) string {
 		return fmt.Sprintf("  %s%s%s", ansiBold, trimmed[4:], ansiReset)
 	}
 	if strings.HasPrefix(trimmed, "## ") {
-		return fmt.Sprintf("\n  %s%s%s%s", ansiBoldCyan, trimmed[3:], ansiReset, "")
+		return fmt.Sprintf("\n  %s%s%s", ansiBoldCyan, trimmed[3:], ansiReset)
 	}
 	if strings.HasPrefix(trimmed, "# ") {
-		return fmt.Sprintf("\n  %s%s%s%s", ansiBoldCyan, trimmed[2:], ansiReset, "")
+		return fmt.Sprintf("\n  %s%s%s", ansiBoldCyan, trimmed[2:], ansiReset)
 	}
 
 	if trimmed == "---" || trimmed == "***" || trimmed == "___" {
@@ -188,10 +184,16 @@ func renderInline(text string) string {
 }
 
 func RenderMarkdown(text string) string {
-	var m mdPrinter
-	var lines []string
-	for _, line := range strings.Split(cleanHTML(text), "\n") {
-		lines = append(lines, m.renderLine(line))
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(80),
+	)
+	if err != nil {
+		return cleanHTML(text)
 	}
-	return strings.Join(lines, "\n")
+	rendered, err := renderer.Render(cleanHTML(text))
+	if err != nil {
+		return cleanHTML(text)
+	}
+	return strings.TrimRight(rendered, "\n")
 }
