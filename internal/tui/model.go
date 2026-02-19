@@ -503,14 +503,19 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		var printCmds []tea.Cmd
 
 		// Helper: show header if not yet shown for this COT.
-		// Explanation (short summary) is the bold header line;
-		// Description (detailed scope) is the dim detail beneath.
+		// Explanation (short action summary) is the bold header line;
+		// Description (detailed question/scope) is the dim detail beneath.
 		showHeader := func() {
-			if !m.cotDescShown[cotID] && desc != "" {
-				m.cotDescShown[cotID] = true
-				printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
+			if !m.cotDescShown[cotID] {
 				if explanation != "" {
-					printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+explanation)))
+					m.cotDescShown[cotID] = true
+					printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+explanation)))
+					if desc != "" {
+						printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+desc)))
+					}
+				} else if desc != "" {
+					m.cotDescShown[cotID] = true
+					printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
 				}
 			}
 		}
