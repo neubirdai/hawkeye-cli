@@ -57,6 +57,8 @@ func main() {
 		err = cmdInspect(args[1:])
 	case "summary":
 		err = cmdSummary(args[1:])
+	case "feedback", "td":
+		err = cmdFeedback(args[1:])
 	case "prompts":
 		err = cmdPrompts()
 	case "projects":
@@ -692,6 +694,74 @@ func cmdSummary(args []string) error {
 	return nil
 }
 
+// ─── feedback ───────────────────────────────────────────────────────────────
+
+func cmdFeedback(args []string) error {
+	var reason string
+	var debugMode bool
+	var positional []string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-r", "--reason":
+			if i+1 < len(args) {
+				i++
+				reason = args[i]
+			} else {
+				return fmt.Errorf("--reason requires a value")
+			}
+		case "--debug":
+			debugMode = true
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	sessionUUID := ""
+	if len(positional) > 0 {
+		sessionUUID = positional[0]
+	} else if cfg.LastSession != "" {
+		sessionUUID = cfg.LastSession
+	} else {
+		fmt.Println("Usage: hawkeye feedback|td [session-uuid] [-r reason]")
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	client.SetDebug(debugMode)
+
+	resp, err := client.SessionInspect(cfg.ProjectID, sessionUUID)
+	if err != nil {
+		return fmt.Errorf("inspecting session: %w", err)
+	}
+
+	if len(resp.PromptCycle) == 0 {
+		return fmt.Errorf("no prompt cycles found in session %s", sessionUUID)
+	}
+
+	last := resp.PromptCycle[len(resp.PromptCycle)-1]
+	items := []api.RatingItemID{{ItemType: "ITEM_TYPE_PROMPT_CYCLE", ItemID: last.ID}}
+
+	if reason == "" {
+		reason = "Thumbs down from CLI"
+	}
+
+	if err := client.PutRating(cfg.ProjectID, sessionUUID, items, "RATING_THUMBS_DOWN", reason); err != nil {
+		return fmt.Errorf("submitting feedback: %w", err)
+	}
+
+	display.Success(fmt.Sprintf("Thumbs down submitted for session %s", sessionUUID))
+	return nil
+}
+
 // ─── prompts ────────────────────────────────────────────────────────────────
 
 func cmdPrompts() error {
@@ -888,6 +958,8 @@ func printUsage() {
     -n, --limit <count>     Number of sessions to list (default: 20)
   inspect [session-uuid]    View session details (defaults to last session)
   summary [session-uuid]    Get executive summary (defaults to last session)
+  feedback|td [session-uuid]  Thumbs down feedback (defaults to last session)
+    -r, --reason <text>     Reason for negative feedback
 
 %sLibrary:%s
   prompts                   Browse available investigation prompts

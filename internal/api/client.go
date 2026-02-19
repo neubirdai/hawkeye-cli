@@ -643,6 +643,45 @@ func (c *Client) PromptLibrary(projectUUID string) (*PromptLibraryResponse, erro
 	return &resp, nil
 }
 
+// --- Rating / Feedback ---
+
+type RatingItemID struct {
+	ItemType string `json:"item_type"`
+	ItemID   string `json:"item_id"`
+}
+
+type PutRatingRequest struct {
+	Request     *GenDBRequest  `json:"request,omitempty"`
+	ProjectUUID string         `json:"project_uuid,omitempty"`
+	SessionUUID string         `json:"session_uuid,omitempty"`
+	ItemIDs     []RatingItemID `json:"item_ids,omitempty"`
+	Rating      string         `json:"rating"`
+	Reason      string         `json:"rating_reason"`
+}
+
+type PutRatingResponse struct {
+	Response *GenDBResponse `json:"response,omitempty"`
+}
+
+func (c *Client) PutRating(projectUUID, sessionUUID string, itemIDs []RatingItemID, rating, reason string) error {
+	reqBody := PutRatingRequest{
+		Request:     &GenDBRequest{ClientIdentifier: "hawkeye-cli", RequestID: newUUID()},
+		ProjectUUID: projectUUID,
+		SessionUUID: sessionUUID,
+		ItemIDs:     itemIDs,
+		Rating:      rating,
+		Reason:      reason,
+	}
+	var resp PutRatingResponse
+	if err := c.doJSON("PUT", "/v1/inference/rating", reqBody, &resp); err != nil {
+		return err
+	}
+	if resp.Response != nil && resp.Response.ErrorCode != 0 {
+		return fmt.Errorf("server error: %s", resp.Response.ErrorMessage)
+	}
+	return nil
+}
+
 // --- Generic JSON helper ---
 
 func (c *Client) doJSON(method, path string, reqBody interface{}, result interface{}) error {
