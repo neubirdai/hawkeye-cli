@@ -20,18 +20,19 @@ var activeProfile string
 func main() {
 	args := os.Args[1:]
 
-	if len(args) == 0 {
-		printUsage()
-		os.Exit(0)
-	}
-
+	// Parse global flags first (--profile)
 	args = parseGlobalFlags(args)
 
+	// No args → launch interactive mode (default)
 	if len(args) == 0 {
-		printUsage()
-		os.Exit(0)
+		if err := tui.Run(version, activeProfile); err != nil {
+			display.Error(err.Error())
+			os.Exit(1)
+		}
+		return
 	}
 
+	// Explicit -i flag also launches interactive mode
 	if args[0] == "-i" || args[0] == "--interactive" || args[0] == "interactive" {
 		if err := tui.Run(version, activeProfile); err != nil {
 			display.Error(err.Error())
@@ -926,8 +927,8 @@ func printUsage() {
 	fmt.Printf(`%sHawkeye CLI%s — Neubird AI SRE Platform (v%s)
 
 %sUsage:%s
-  hawkeye [--profile <name>] -i                      Launch interactive mode (recommended)
-  hawkeye [--profile <name>] <command> [arguments]
+  hawkeye                                            Launch interactive mode (default)
+  hawkeye [--profile <name>] <command> [arguments]   Run a specific command
 
 %sGetting Started:%s
   login <url> -u <user> -p <pass>  Authenticate (URL = frontend address)
@@ -959,6 +960,7 @@ func printUsage() {
   --profile <name>            Use a named config profile (default: unnamed)
 
 %sExamples:%s
+  hawkeye                                            # Start interactive mode
   hawkeye login https://myenv.app.neubird.ai/ -u admin@company.com -p secret
   hawkeye set project 66520f61-6a43-48ac-8286-a7e7cf9755c5
   hawkeye investigate "Why is the API returning 500 errors?"
@@ -966,7 +968,6 @@ func printUsage() {
   hawkeye sessions
   hawkeye inspect <session-uuid>
   hawkeye --profile staging login https://myenv.app.neubird.ai/ -u user -p pass
-  hawkeye --profile staging investigate "Check API errors"
 
 `, display.Bold, display.Reset, version,
 		display.Cyan, display.Reset,
