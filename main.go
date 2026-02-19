@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strconv"
@@ -389,68 +388,6 @@ func cmdInvestigate(args []string) error {
 	}
 
 	display.Success("Investigation complete")
-
-	// Interactive loop — continue investigating in the same session
-	scanner := bufio.NewScanner(os.Stdin)
-
-	for {
-		followUps := streamDisplay.FollowUpSuggestions
-
-		fmt.Println()
-		if len(followUps) > 0 {
-			fmt.Printf("  %sChoose a follow-up or type your own question:%s\n\n", display.Dim, display.Reset)
-			for i, s := range followUps {
-				fmt.Printf("    %s%d.%s %s\n", display.Cyan, i+1, display.Reset, s)
-			}
-			fmt.Println()
-		}
-
-		fmt.Printf("  %s❯%s ", display.Cyan, display.Reset)
-
-		if !scanner.Scan() {
-			// EOF (Ctrl+D) — exit cleanly
-			fmt.Println()
-			break
-		}
-		input := strings.TrimSpace(scanner.Text())
-
-		if input == "" {
-			continue
-		}
-		if input == "q" || input == "quit" || input == "exit" {
-			break
-		}
-
-		// Check if user typed a number to pick a follow-up
-		nextPrompt := input
-		if num, err := strconv.Atoi(input); err == nil && num >= 1 && num <= len(followUps) {
-			nextPrompt = followUps[num-1]
-		}
-
-		// Reset display for next round
-		streamDisplay.Reset()
-
-		fmt.Printf("\n %s── 🔄 Follow-up Investigation ───────────────────────────────────────────────%s\n", display.Dim, display.Reset)
-		fmt.Println()
-		fmt.Printf("    %sPrompt:%s   %s\n", display.Dim, display.Reset, nextPrompt)
-		fmt.Printf("    %sSession:%s  %s\n", display.Dim, display.Reset, sessionUUID)
-		fmt.Println()
-		fmt.Printf(" %s──────────────────────────────────────────────────────────────────────────%s\n", display.Dim, display.Reset)
-
-		err = client.ProcessPromptStream(cfg.ProjectID, sessionUUID, nextPrompt, streamDisplay.HandleEvent)
-
-		fmt.Println()
-		fmt.Printf(" %s──────────────────────────────────────────────────────────────────────────%s\n", display.Dim, display.Reset)
-
-		if err != nil {
-			display.Error(fmt.Sprintf("stream error: %v", err))
-			// Don't exit — let the user try again
-			continue
-		}
-
-		display.Success("Investigation complete")
-	}
-
 	fmt.Printf("\n  %sTip:%s Run %shawkeye inspect %s%s to review the full session.\n",
 		display.Dim, display.Reset, display.Cyan, sessionUUID, display.Reset)
 	fmt.Printf("  %sTip:%s Run %shawkeye summary %s%s for an executive summary.\n\n",
