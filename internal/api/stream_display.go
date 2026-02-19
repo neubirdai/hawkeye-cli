@@ -63,8 +63,9 @@ type StreamDisplay struct {
 	chatHeaderUp    bool
 
 	// Final answer accumulator
-	FinalAnswer string
-	SessionUUID string
+	FinalAnswer        string
+	SessionUUID        string
+	FollowUpSuggestions []string
 
 	// Markdown colorizer for streaming output
 	md mdPrinter
@@ -118,7 +119,7 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 		// Print a separator line once after COT content ends
 		if !d.cotSeparatorDone {
 			fmt.Println()
-			fmt.Printf("  %s────────────────────────────────────────────────────────────────%s\n", ansiDim, ansiReset)
+			fmt.Printf(" %s──────────────────────────────────────────────────────────────────────────%s\n", ansiDim, ansiReset)
 			d.cotSeparatorDone = true
 		}
 	}
@@ -143,14 +144,17 @@ func (d *StreamDisplay) HandleEvent(resp *ProcessPromptResponse) {
 
 	case "CONTENT_TYPE_SESSION_NAME":
 		if len(parts) > 0 {
-			fmt.Printf("  📛 %s\n", parts[0])
+			fmt.Println()
+			fmt.Printf(" %s━━ 📛 %s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", ansiDim, parts[0], ansiReset)
 		}
 
 	case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
+		d.FollowUpSuggestions = nil
 		fmt.Println()
 		fmt.Println("  💡 Follow-up suggestions:")
 		for i, p := range parts {
 			fmt.Printf("     %d. %s\n", i+1, p)
+			d.FollowUpSuggestions = append(d.FollowUpSuggestions, p)
 		}
 
 	case "CONTENT_TYPE_EXECUTION_TIME":
@@ -209,6 +213,37 @@ func (d *StreamDisplay) Stop() {
 	d.clearActivity()
 }
 
+// Reset prepares the display for a new prompt in the same session.
+// Keeps SessionUUID and debug, resets everything else.
+func (d *StreamDisplay) Reset() {
+	d.Stop()
+	d.lastProgress = ""
+	d.seenProgress = make(map[string]bool)
+	d.spinnerIdx = 0
+	d.seenSourceIDs = make(map[string]bool)
+	d.sourcesPrinted = false
+	d.seenErrors = make(map[string]bool)
+	d.cotRound = 0
+	d.cotAccumulated = ""
+	d.cotPrintedLen = 0
+	d.cotHeaderUp = false
+	d.cotEverStarted = false
+	d.currentCotID = ""
+	d.cotSeparatorDone = false
+	d.cotDescription = ""
+	d.cotExplanation = ""
+	d.cotCategory = ""
+	d.cotStatus = ""
+	d.cotSources = nil
+	d.lastContentType = ""
+	d.chatAccumulated = ""
+	d.chatPrintedLen = 0
+	d.chatHeaderUp = false
+	d.FinalAnswer = ""
+	d.FollowUpSuggestions = nil
+	d.md = mdPrinter{}
+}
+
 // --- Progress ---
 
 func (d *StreamDisplay) handleProgress(parts []string) {
@@ -236,7 +271,7 @@ func (d *StreamDisplay) handleProgress(parts []string) {
 
 	d.lastProgress = text
 	display := extractProgressDescription(text)
-	fmt.Printf("  ⟳ %s\n", display)
+	fmt.Printf("  %s●%s %s\n", ansiDim, ansiReset, display)
 
 	// Start a spinner below the permanent line so there's
 	// visible animation during dead air between events.
@@ -463,15 +498,38 @@ func (d *StreamDisplay) handleSources(parts []string) {
 		return
 	}
 
+	// Group sources by category
+	groups := make(map[string][]string)
+	var order []string
+	for _, s := range newSources {
+		cat := strings.ToLower(s.Category)
+		if cat == "" {
+			cat = "other"
+		}
+		title := s.Title
+		if title == "" {
+			title = s.ID
+		}
+		if _, exists := groups[cat]; !exists {
+			order = append(order, cat)
+		}
+		groups[cat] = append(groups[cat], title)
+	}
+
+	totalCount := 0
+	for _, titles := range groups {
+		totalCount += len(titles)
+	}
+
 	if !d.sourcesPrinted {
 		fmt.Println()
-		fmt.Println("  📎 Data Sources:")
+		fmt.Printf("  📎 %sSources (%d):%s\n", ansiDim, totalCount, ansiReset)
 		d.sourcesPrinted = true
 	}
 
-	for _, s := range newSources {
-		label := formatSourceLabel(s)
-		fmt.Printf("     • %s\n", label)
+	for _, cat := range order {
+		titles := groups[cat]
+		fmt.Printf("     %s%-8s%s %s\n", ansiDim, cat, ansiReset, strings.Join(titles, " · "))
 	}
 }
 
@@ -664,25 +722,27 @@ func (d *StreamDisplay) ensureHeader() {
 
 	fmt.Println()
 
-	// Step number + category — bold blue
+	// Step number + category — left-anchored line
 	cat := formatCOTCategory(d.cotCategory)
 	if cat != "" {
-		fmt.Printf("  🔍 %s%sInvestigation step %d  [%s]%s\n", ansiBold, ansiBlue, d.cotRound, cat, ansiReset)
+		fmt.Printf(" %s%s── Step %d · %s ────────────────────────────────────────────────────────────%s\n",
+			ansiBold, ansiBlue, d.cotRound, cat, ansiReset)
 	} else {
-		fmt.Printf("  🔍 %s%sInvestigation step %d%s\n", ansiBold, ansiBlue, d.cotRound, ansiReset)
+		fmt.Printf(" %s%s── Step %d ──────────────────────────────────────────────────────────────────%s\n",
+			ansiBold, ansiBlue, d.cotRound, ansiReset)
 	}
 
 	// Explanation (primary — the short summary shown in UI sidebar)
 	if d.cotExplanation != "" {
-		fmt.Printf("     %s\n", d.cotExplanation)
+		fmt.Printf("    %s\n", d.cotExplanation)
 	}
 
 	// Description (secondary — the detailed scope shown in UI tooltip)
 	if d.cotDescription != "" {
 		if d.cotExplanation != "" {
-			fmt.Printf("     ↳ %s\n", d.cotDescription)
+			fmt.Printf("    %s↳ %s%s\n", ansiDim, d.cotDescription, ansiReset)
 		} else {
-			fmt.Printf("     %s\n", d.cotDescription)
+			fmt.Printf("    %s\n", d.cotDescription)
 		}
 	}
 
@@ -790,19 +850,11 @@ func (d *StreamDisplay) endCOTRound() {
 			fmt.Println()
 		}
 
-		// Step footer: status + source count
-		statusLabel := formatCOTStatus(d.cotStatus)
+		// Step footer: source count with checkmark
 		srcCount := len(d.cotSources)
-		footer := []string{}
-		if statusLabel != "" {
-			footer = append(footer, statusLabel)
-		}
 		if srcCount > 0 {
-			footer = append(footer, fmt.Sprintf("%d sources consulted", srcCount))
-		}
-		if len(footer) > 0 {
 			fmt.Println()
-			fmt.Printf("     %s\n", strings.Join(footer, " · "))
+			fmt.Printf("     %s✓ %d sources consulted%s\n", ansiDim, srcCount, ansiReset)
 		}
 		fmt.Println()
 	}
@@ -914,9 +966,7 @@ func (d *StreamDisplay) handleChatResponse(parts []string, meta *Metadata) {
 
 func (d *StreamDisplay) printChatHeader() {
 	fmt.Println()
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("  💬 Response")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf(" %s━━ 💬 Response ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", ansiDim, ansiReset)
 	fmt.Println()
 	d.chatHeaderUp = true
 }
