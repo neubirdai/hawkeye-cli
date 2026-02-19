@@ -508,11 +508,9 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		showHeader := func() {
 			if !m.cotDescShown[cotID] && desc != "" {
 				m.cotDescShown[cotID] = true
+				printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
 				if explanation != "" {
-					printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+explanation)))
-					printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+desc)))
-				} else {
-					printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
+					printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+explanation)))
 				}
 			}
 		}
