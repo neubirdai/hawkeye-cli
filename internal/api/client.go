@@ -88,6 +88,51 @@ func NewClientWithServer(server string) *Client {
 	}
 }
 
+func ResolveBackendURL(frontendURL string) (string, error) {
+	frontendURL = strings.TrimRight(frontendURL, "/")
+	envURL := frontendURL + "/env.js"
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(envURL)
+	if err != nil {
+		return "", fmt.Errorf("fetching %s: %w", envURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetching %s: status %d", envURL, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", envURL, err)
+	}
+
+	content := string(body)
+	key := "VITE_BASE_API_URL:"
+	idx := strings.Index(content, key)
+	if idx < 0 {
+		return "", fmt.Errorf("VITE_BASE_API_URL not found in %s", envURL)
+	}
+
+	after := content[idx+len(key):]
+	quote := byte('"')
+	start := strings.IndexByte(after, quote)
+	if start < 0 {
+		quote = '\''
+		start = strings.IndexByte(after, quote)
+	}
+	if start < 0 {
+		return "", fmt.Errorf("could not parse VITE_BASE_API_URL value")
+	}
+	end := strings.IndexByte(after[start+1:], quote)
+	if end < 0 {
+		return "", fmt.Errorf("could not parse VITE_BASE_API_URL value")
+	}
+
+	return strings.TrimRight(after[start+1:start+1+end], "/"), nil
+}
+
 func (c *Client) Login(email, password string) (*LoginResponse, error) {
 	reqBody := LoginRequest{Email: email, Password: password}
 

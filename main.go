@@ -85,17 +85,16 @@ func cmdLogin(args []string) error {
 	}
 
 	if len(positional) == 0 {
-		fmt.Println("Usage: hawkeye login <server-url> -u <username> -p <password>")
+		fmt.Println("Usage: hawkeye login <url> -u <username> -p <password>")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  hawkeye login http://localhost:3001 -u admin@company.com -p mypassword")
-		fmt.Println("  hawkeye login https://hawkeye.internal:8080 -u user -p pass")
+		fmt.Println("  hawkeye login https://littlebird.app.neubird.ai/ -u user@company.com -p pass")
+		fmt.Println("  hawkeye login http://localhost:3000 -u admin@company.com -p mypassword")
 		return nil
 	}
 
-	serverURL := positional[0]
+	frontendURL := positional[0]
 
-	// Prompt for missing credentials
 	if username == "" {
 		fmt.Print("Username/Email: ")
 		fmt.Scanln(&username)
@@ -110,6 +109,19 @@ func cmdLogin(args []string) error {
 	}
 
 	fmt.Println()
+	display.Spinner("Resolving backend from " + frontendURL + " ...")
+
+	serverURL, err := api.ResolveBackendURL(frontendURL)
+	if err != nil {
+		display.ClearLine()
+		display.Warn(fmt.Sprintf("Could not resolve backend from frontend: %v", err))
+		display.Info("Fallback:", "using URL directly as backend")
+		serverURL = strings.TrimRight(frontendURL, "/")
+	} else {
+		display.ClearLine()
+		display.Success(fmt.Sprintf("Resolved backend: %s", serverURL))
+	}
+
 	display.Spinner("Authenticating...")
 
 	client := api.NewClientWithServer(serverURL)
@@ -122,7 +134,6 @@ func cmdLogin(args []string) error {
 	display.ClearLine()
 	display.Success("Authenticated successfully")
 
-	// Save config
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -783,7 +794,7 @@ func printUsage() {
   hawkeye <command> [arguments]
 
 %sGetting Started:%s
-  login <url> -u <user> -p <pass>  Authenticate with a Hawkeye server
+  login <url> -u <user> -p <pass>  Authenticate (URL = frontend address)
   set project <uuid>               Set the active project UUID
   config                           Show current configuration
 
@@ -807,7 +818,7 @@ func printUsage() {
   prompts                   Browse available investigation prompts
 
 %sExamples:%s
-  hawkeye login http://localhost:3001 -u admin@company.com -p secret
+  hawkeye login https://littlebird.app.neubird.ai/ -u admin@company.com -p secret
   hawkeye set project 66520f61-6a43-48ac-8286-a7e7cf9755c5
   hawkeye investigate "Why is the API returning 500 errors?"
   hawkeye investigate "Check DB connections" -s <session-uuid>
