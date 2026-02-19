@@ -599,6 +599,27 @@ func (c *Client) GetSessionSummary(projectUUID, sessionUUID string) (*GetSession
 	return &resp, nil
 }
 
+// --- Projects ---
+
+type ProjectSpec struct {
+	UUID  string `json:"uuid"`
+	Name  string `json:"name"`
+	Ready bool   `json:"ready"`
+}
+
+type ListProjectResponse struct {
+	Response *GenDBResponse `json:"response,omitempty"`
+	Specs    []ProjectSpec  `json:"specs,omitempty"`
+}
+
+func (c *Client) ListProjects() (*ListProjectResponse, error) {
+	var resp ListProjectResponse
+	if err := c.doJSON("GET", "/v1/project", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // --- Prompt Library ---
 
 type InitialPrompt struct {

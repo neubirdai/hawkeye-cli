@@ -41,6 +41,8 @@ func main() {
 		err = cmdSummary(args[1:])
 	case "prompts":
 		err = cmdPrompts()
+	case "projects":
+		err = cmdProjects()
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version", "-v":
@@ -750,6 +752,53 @@ func cmdPrompts() error {
 	return nil
 }
 
+// ─── projects ───────────────────────────────────────────────────────────────
+
+func cmdProjects() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	client := api.NewClient(cfg)
+
+	resp, err := client.ListProjects()
+	if err != nil {
+		return fmt.Errorf("listing projects: %w", err)
+	}
+
+	var projects []api.ProjectSpec
+	for _, p := range resp.Specs {
+		if !strings.Contains(p.Name, "SystemGlobalProject") {
+			projects = append(projects, p)
+		}
+	}
+
+	display.Header(fmt.Sprintf("Projects (%d)", len(projects)))
+
+	if len(projects) == 0 {
+		display.Warn("No projects found.")
+		return nil
+	}
+
+	for _, p := range projects {
+		ready := display.Green + "ready" + display.Reset
+		if !p.Ready {
+			ready = display.Yellow + "not ready" + display.Reset
+		}
+		fmt.Printf("  ⏺ %s%-20s%s %s%s%s  %s[%s]%s\n", display.Bold, p.Name, display.Reset, display.Dim, p.UUID, display.Reset, display.Dim, ready, display.Reset)
+	}
+
+	fmt.Println()
+	fmt.Printf("  %sTip:%s Run %shawkeye set project <uuid>%s to select a project.\n\n",
+		display.Dim, display.Reset, display.Cyan, display.Reset)
+
+	return nil
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 func wrapText(text string, width int) []string {
@@ -795,6 +844,7 @@ func printUsage() {
 
 %sGetting Started:%s
   login <url> -u <user> -p <pass>  Authenticate (URL = frontend address)
+  projects                         List available projects
   set project <uuid>               Set the active project UUID
   config                           Show current configuration
 
