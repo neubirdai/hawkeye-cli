@@ -743,8 +743,8 @@ func (m model) cmdInvestigate(prompt string) (tea.Model, tea.Cmd) {
 	}
 
 	m.mode = modeStreaming
-	m.streamPrompt = prompt
 	m.resetStreamState()
+	m.streamPrompt = prompt
 
 	return m, tea.Sequence(
 		tea.Println(""),
