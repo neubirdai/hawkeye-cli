@@ -60,8 +60,8 @@ type StreamDisplay struct {
 	chatHeaderUp    bool
 
 	// Final answer accumulator
-	FinalAnswer        string
-	SessionUUID        string
+	FinalAnswer         string
+	SessionUUID         string
 	FollowUpSuggestions []string
 
 	// Markdown colorizer for streaming output
@@ -218,7 +218,6 @@ func (d *StreamDisplay) Reset() {
 	d.spinnerIdx = 0
 	d.seenSourceIDs = make(map[string]bool)
 	d.sourcesPrinted = false
-	d.seenErrors = make(map[string]bool)
 	d.cotRound = 0
 	d.cotAccumulated = ""
 	d.cotPrintedLen = 0
