@@ -427,7 +427,7 @@ func cmdSessions(args []string) error {
 
 	client := api.NewClient(cfg)
 
-	resp, err := client.SessionList(cfg.ProjectID, limit)
+	resp, err := client.SessionList(cfg.ProjectID, limit, nil)
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}
