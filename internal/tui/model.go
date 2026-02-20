@@ -574,11 +574,17 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		}
 
 	case "CONTENT_TYPE_CHAT_RESPONSE":
-		// Print delta text line by line
 		newText := ""
-		if len(msg.text) > m.chatPrinted {
-			newText = msg.text[m.chatPrinted:]
-			m.chatPrinted = len(msg.text)
+		if msg.eventType == "chat_delta" {
+			// Delta mode: msg.text IS the new fragment to append
+			newText = msg.text
+			m.chatPrinted += len(newText)
+		} else {
+			// Full text mode: diff against what we've already printed
+			if len(msg.text) > m.chatPrinted {
+				newText = msg.text[m.chatPrinted:]
+				m.chatPrinted = len(msg.text)
+			}
 		}
 		if newText == "" {
 			return nil
@@ -599,7 +605,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		}
 
 		if len(printCmds) > 0 {
-			return tea.Batch(printCmds...)
+			return tea.Sequence(printCmds...)
 		}
 
 	case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
@@ -612,7 +618,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 				printCmds = append(printCmds, tea.Println(followUpStyle.Render(fmt.Sprintf("     %d. %s", i+1, p))))
 			}
 		}
-		return tea.Batch(printCmds...)
+		return tea.Sequence(printCmds...)
 
 	case "CONTENT_TYPE_SESSION_NAME":
 		return tea.Println(sessionNameStyle.Render("  📛 " + msg.text))

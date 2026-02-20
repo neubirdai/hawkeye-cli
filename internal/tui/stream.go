@@ -101,9 +101,19 @@ func beginStream(client *api.Client, projectID, sessionID, prompt string) tea.Cm
 				}
 
 			case "CONTENT_TYPE_CHAT_RESPONSE":
-				text := strings.Join(parts, "\n")
-				text = stripHTML(text)
-				ch <- streamChunkMsg{contentType: ct, text: text, raw: resp}
+				isDelta := resp.Message.Metadata != nil && resp.Message.Metadata.IsDeltaTrue()
+				if isDelta {
+					// Delta mode: parts[0] is the new fragment
+					if len(parts) > 0 {
+						text := stripHTML(parts[0])
+						ch <- streamChunkMsg{contentType: ct, eventType: "chat_delta", text: text, raw: resp}
+					}
+				} else {
+					// Full text mode: join all parts
+					text := strings.Join(parts, "\n")
+					text = stripHTML(text)
+					ch <- streamChunkMsg{contentType: ct, eventType: "chat_full", text: text, raw: resp}
+				}
 
 			case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
 				ch <- streamChunkMsg{contentType: ct, text: strings.Join(parts, "\n"), raw: resp}
