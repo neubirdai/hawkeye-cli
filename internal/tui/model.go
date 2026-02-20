@@ -35,13 +35,17 @@ type slashCmd struct {
 var slashCommands = []slashCmd{
 	{"/clear", "Clear the screen"},
 	{"/config", "Show current configuration"},
+	{"/connections", "List data source connections"},
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
 	{"/inspect", "View session details"},
+	{"/link", "Get web UI URL for session"},
 	{"/login", "Login to a Hawkeye server"},
 	{"/projects", "List available projects"},
 	{"/prompts", "Browse investigation prompts"},
 	{"/quit", "Exit Hawkeye"},
+	{"/report", "Show incident analytics"},
+	{"/score", "Show RCA quality scores"},
 	{"/session", "Set active session"},
 	{"/sessions", "List recent sessions"},
 	{"/set", "Set project or config"},
@@ -405,6 +409,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case feedbackResultMsg:
 		return m.handleFeedbackResult(msg)
+
+	case scoreResultMsg:
+		return m.handleScoreResult(msg)
+
+	case reportResultMsg:
+		return m.handleReportResult(msg)
+
+	case connectionsResultMsg:
+		return m.handleConnectionsResult(msg)
+
+	case resourcesResultMsg:
+		return m.handleResourcesResult(msg)
 	}
 
 	// Update sub-components
