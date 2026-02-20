@@ -281,7 +281,7 @@ func (m model) cmdSessions() (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(
 		tea.Println(statusStyle.Render("  ⟳ Loading sessions...")),
 		func() tea.Msg {
-			resp, err := client.SessionList(projectID, 15)
+			resp, err := client.SessionList(projectID, 15, nil)
 			if err != nil {
 				return sessionsLoadedMsg{err: err}
 			}

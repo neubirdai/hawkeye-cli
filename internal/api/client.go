@@ -481,11 +481,26 @@ type PaginationRequest struct {
 	Limit int `json:"limit"`
 }
 
+// PaginationFilter represents a filter for paginated queries.
+type PaginationFilter struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Operator string `json:"operator"`
+}
+
+// PaginationSort specifies sort order for paginated queries.
+type PaginationSort struct {
+	Field     string `json:"field"`
+	Ascending bool   `json:"ascending"`
+}
+
 type SessionListRequest struct {
 	Request          *GenDBRequest      `json:"request,omitempty"`
 	Pagination       *PaginationRequest `json:"pagination,omitempty"`
 	OrganizationUUID string             `json:"organization_uuid,omitempty"`
 	ProjectUUID      string             `json:"project_uuid,omitempty"`
+	Filters          []PaginationFilter `json:"filters,omitempty"`
+	Sort             []PaginationSort   `json:"sort,omitempty"`
 }
 
 type SessionListResponse struct {
@@ -493,12 +508,13 @@ type SessionListResponse struct {
 	Sessions []SessionInfo  `json:"sessions,omitempty"`
 }
 
-func (c *Client) SessionList(projectUUID string, limit int) (*SessionListResponse, error) {
+func (c *Client) SessionList(projectUUID string, limit int, filters []PaginationFilter) (*SessionListResponse, error) {
 	reqBody := SessionListRequest{
 		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
 		OrganizationUUID: c.orgUUID,
 		ProjectUUID:      projectUUID,
 		Pagination:       &PaginationRequest{Start: 0, Limit: limit},
+		Filters:          filters,
 	}
 	var resp SessionListResponse
 	if err := c.doJSON("POST", "/v1/inference/session/list", reqBody, &resp); err != nil {
@@ -571,11 +587,40 @@ func (c *Client) SessionInspect(projectUUID, sessionUUID string) (*SessionInspec
 
 // --- Session Summary ---
 
+// ScoreSection holds a numeric score with summary.
+type ScoreSection struct {
+	Score   float64 `json:"score"`
+	Summary string  `json:"summary"`
+}
+
+// QualSection holds qualitative assessment data.
+type QualSection struct {
+	Strengths    []string `json:"strengths"`
+	Improvements []string `json:"improvements"`
+}
+
+// AnalysisScore holds RCA quality scores.
+type AnalysisScore struct {
+	Accuracy     ScoreSection `json:"accuracy"`
+	Completeness ScoreSection `json:"completeness"`
+	Qualitative  QualSection  `json:"qualitative"`
+	ScoredBy     string       `json:"scored_by"`
+}
+
+// TimeSavedSummary holds time-saved metrics for a session.
+type TimeSavedSummary struct {
+	TimeSavedMinutes         float64 `json:"time_saved_minutes"`
+	StandardInvestigationMin float64 `json:"standard_investigation_time_minutes"`
+	HawkeyeInvestigationMin  float64 `json:"hawkeye_investigation_time_minutes"`
+}
+
 type SessionSummary struct {
-	ActionItems  []string             `json:"action_items"`
-	Analysis     string               `json:"analysis"`
-	Rating       string               `json:"rating"`
-	ShortSummary *ShortSessionSummary `json:"short_session_summary"`
+	ActionItems   []string             `json:"action_items"`
+	Analysis      string               `json:"analysis"`
+	Rating        string               `json:"rating"`
+	ShortSummary  *ShortSessionSummary `json:"short_session_summary"`
+	AnalysisScore *AnalysisScore       `json:"analysis_score,omitempty"`
+	TimeSaved     *TimeSavedSummary    `json:"time_saved,omitempty"`
 }
 
 type ShortSessionSummary struct {
@@ -680,6 +725,94 @@ func (c *Client) PutRating(projectUUID, sessionUUID string, itemIDs []RatingItem
 		return fmt.Errorf("server error: %s", resp.Response.ErrorMessage)
 	}
 	return nil
+}
+
+// --- Incident Report ---
+
+// IncidentTypeReport holds per-type analytics.
+type IncidentTypeReport struct {
+	Type                string  `json:"type"`
+	Count               int     `json:"count"`
+	AvgTimeSavedMinutes float64 `json:"avg_investigation_time_saved_minutes"`
+	NoiseReduction      float64 `json:"noise_reduction"`
+}
+
+// IncidentReportResponse holds org-wide incident analytics.
+type IncidentReportResponse struct {
+	AvgTimeSavedMinutes float64              `json:"avg_investigation_time_saved_minutes"`
+	AvgMTTR             float64              `json:"avg_mttr"`
+	NoiseReduction      float64              `json:"noise_reduction"`
+	TotalIncidents      int                  `json:"total_incidents"`
+	TotalInvestigations int                  `json:"total_investigations"`
+	TotalTimeSavedHours float64              `json:"total_investigation_time_saved_hours"`
+	StartTime           string               `json:"start_time"`
+	EndTime             string               `json:"end_time"`
+	IncidentTypeReports []IncidentTypeReport `json:"incident_type_reports"`
+}
+
+func (c *Client) GetIncidentReport() (*IncidentReportResponse, error) {
+	var resp IncidentReportResponse
+	if err := c.doJSON("GET", "/v1/inference/incident_report", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// --- Connections ---
+
+// ConnectionSpec describes a data source connection.
+type ConnectionSpec struct {
+	UUID          string `json:"uuid"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	SyncState     string `json:"sync_state"`
+	TrainingState string `json:"training_state"`
+}
+
+// ListConnectionsResponse holds the list of connections.
+type ListConnectionsResponse struct {
+	Specs []ConnectionSpec `json:"specs"`
+}
+
+func (c *Client) ListConnections(projectUUID string) (*ListConnectionsResponse, error) {
+	params := url.Values{}
+	params.Set("project_uuid", projectUUID)
+	var resp ListConnectionsResponse
+	if err := c.doJSON("GET", "/v1/connection?"+params.Encode(), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// --- Resources ---
+
+// ResourceID identifies a resource.
+type ResourceID struct {
+	Name string `json:"name"`
+	UUID string `json:"uuid"`
+}
+
+// ResourceSpec describes a resource within a connection.
+type ResourceSpec struct {
+	ID             ResourceID `json:"id"`
+	ConnectionUUID string     `json:"connection_uuid"`
+	TelemetryType  string     `json:"telemetry_type"`
+}
+
+// ListResourcesResponse holds the list of resources.
+type ListResourcesResponse struct {
+	Specs []ResourceSpec `json:"specs"`
+}
+
+func (c *Client) ListConnectionResources(connectionUUID string, limit int) (*ListResourcesResponse, error) {
+	params := url.Values{}
+	params.Set("connection_uuid", connectionUUID)
+	params.Set("pagination.limit", fmt.Sprintf("%d", limit))
+	var resp ListResourcesResponse
+	if err := c.doJSON("GET", "/v1/resource?"+params.Encode(), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // --- Generic JSON helper ---

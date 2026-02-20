@@ -408,3 +408,185 @@ data: {"message":{"content":{"content_type":"CONTENT_TYPE_CHAT_RESPONSE","parts"
 		}
 	})
 }
+
+func TestSessionListWithFilters(t *testing.T) {
+	t.Run("without filters", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var req SessionListRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if req.Pagination.Limit != 10 {
+				t.Errorf("limit = %d, want 10", req.Pagination.Limit)
+			}
+			if len(req.Filters) != 0 {
+				t.Errorf("filters len = %d, want 0", len(req.Filters))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"sessions":[{"session_uuid":"s1","name":"Test"}]}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+		resp, err := c.SessionList("proj", 10, nil)
+		if err != nil {
+			t.Fatalf("SessionList() error = %v", err)
+		}
+		if len(resp.Sessions) != 1 {
+			t.Errorf("got %d sessions, want 1", len(resp.Sessions))
+		}
+	})
+
+	t.Run("with filters", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var req SessionListRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if len(req.Filters) != 2 {
+				t.Errorf("filters len = %d, want 2", len(req.Filters))
+			}
+			if req.Filters[0].Key != "investigation_status" {
+				t.Errorf("filter[0].Key = %q, want %q", req.Filters[0].Key, "investigation_status")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"sessions":[]}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+		filters := []PaginationFilter{
+			{Key: "investigation_status", Value: "INVESTIGATION_STATUS_COMPLETED", Operator: "=="},
+			{Key: "create_time", Value: "2025-01-01", Operator: "gte"},
+		}
+		resp, err := c.SessionList("proj", 20, filters)
+		if err != nil {
+			t.Fatalf("SessionList() error = %v", err)
+		}
+		if len(resp.Sessions) != 0 {
+			t.Errorf("got %d sessions, want 0", len(resp.Sessions))
+		}
+	})
+}
+
+func TestGetIncidentReport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/v1/inference/incident_report") {
+			t.Errorf("path = %s, want /v1/inference/incident_report", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{
+			"avg_investigation_time_saved_minutes": 15.5,
+			"avg_mttr": 30.2,
+			"noise_reduction": 0.45,
+			"total_incidents": 100,
+			"total_investigations": 150,
+			"total_investigation_time_saved_hours": 38.75,
+			"start_time": "2025-01-01",
+			"end_time": "2025-06-30",
+			"incident_type_reports": [
+				{"type":"alert","count":50,"avg_investigation_time_saved_minutes":10.0,"noise_reduction":0.3}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.GetIncidentReport()
+	if err != nil {
+		t.Fatalf("GetIncidentReport() error = %v", err)
+	}
+	if resp.TotalIncidents != 100 {
+		t.Errorf("TotalIncidents = %d, want 100", resp.TotalIncidents)
+	}
+	if resp.AvgMTTR != 30.2 {
+		t.Errorf("AvgMTTR = %v, want 30.2", resp.AvgMTTR)
+	}
+	if len(resp.IncidentTypeReports) != 1 {
+		t.Fatalf("IncidentTypeReports len = %d, want 1", len(resp.IncidentTypeReports))
+	}
+	if resp.IncidentTypeReports[0].Type != "alert" {
+		t.Errorf("IncidentTypeReports[0].Type = %q, want %q", resp.IncidentTypeReports[0].Type, "alert")
+	}
+}
+
+func TestListConnections(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/v1/connection") {
+			t.Errorf("path = %s, want /v1/connection", r.URL.Path)
+		}
+		if r.URL.Query().Get("project_uuid") != "proj-123" {
+			t.Errorf("project_uuid = %q, want %q", r.URL.Query().Get("project_uuid"), "proj-123")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"specs":[
+			{"uuid":"c1","name":"Datadog","type":"datadog","sync_state":"SYNCED","training_state":"TRAINED"},
+			{"uuid":"c2","name":"Prometheus","type":"prometheus","sync_state":"SYNCING"}
+		]}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.ListConnections("proj-123")
+	if err != nil {
+		t.Fatalf("ListConnections() error = %v", err)
+	}
+	if len(resp.Specs) != 2 {
+		t.Fatalf("got %d connections, want 2", len(resp.Specs))
+	}
+	if resp.Specs[0].Name != "Datadog" {
+		t.Errorf("Specs[0].Name = %q, want %q", resp.Specs[0].Name, "Datadog")
+	}
+	if resp.Specs[1].SyncState != "SYNCING" {
+		t.Errorf("Specs[1].SyncState = %q, want %q", resp.Specs[1].SyncState, "SYNCING")
+	}
+}
+
+func TestListConnectionResources(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/v1/resource") {
+			t.Errorf("path = %s, want /v1/resource", r.URL.Path)
+		}
+		if r.URL.Query().Get("connection_uuid") != "c1" {
+			t.Errorf("connection_uuid = %q, want %q", r.URL.Query().Get("connection_uuid"), "c1")
+		}
+		if r.URL.Query().Get("pagination.limit") != "100" {
+			t.Errorf("pagination.limit = %q, want %q", r.URL.Query().Get("pagination.limit"), "100")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"specs":[
+			{"id":{"name":"cpu-usage","uuid":"r1"},"connection_uuid":"c1","telemetry_type":"metric"},
+			{"id":{"name":"error-logs","uuid":"r2"},"connection_uuid":"c1","telemetry_type":"log"}
+		]}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.ListConnectionResources("c1", 100)
+	if err != nil {
+		t.Fatalf("ListConnectionResources() error = %v", err)
+	}
+	if len(resp.Specs) != 2 {
+		t.Fatalf("got %d resources, want 2", len(resp.Specs))
+	}
+	if resp.Specs[0].ID.Name != "cpu-usage" {
+		t.Errorf("Specs[0].ID.Name = %q, want %q", resp.Specs[0].ID.Name, "cpu-usage")
+	}
+	if resp.Specs[1].TelemetryType != "log" {
+		t.Errorf("Specs[1].TelemetryType = %q, want %q", resp.Specs[1].TelemetryType, "log")
+	}
+}
+
+// Verify *Client implements HawkeyeAPI at compile time.
+var _ HawkeyeAPI = (*Client)(nil)
