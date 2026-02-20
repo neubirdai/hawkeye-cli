@@ -1,0 +1,69 @@
+# GoReleaser configuration for Hawkeye CLI
+# See: https://goreleaser.com
+
+version: 2
+
+project_name: hawkeye
+
+builds:
+  - binary: hawkeye
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+
+checksum:
+  name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+# Homebrew tap configuration
+brews:
+  - repository:
+      owner: neubirdai
+      name: homebrew-hawkeye
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/neubirdai/hawkeye-cli"
+    description: "AI-powered incident investigation CLI for Neubird Hawkeye"
+    license: "MIT"
+    test: |
+      system "#{bin}/hawkeye", "help"
+    install: |
+      bin.install "hawkeye"
+
+release:
+  github:
+    owner: neubirdai
+    name: hawkeye-cli
+  draft: false
+  prerelease: auto
+  mode: replace
