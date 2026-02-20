@@ -47,7 +47,8 @@ changelog:
 
 # Homebrew tap configuration
 brews:
-  - repository:
+  - name: neubird-hawkeye
+    repository:
       owner: neubirdai
       name: homebrew-hawkeye
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
