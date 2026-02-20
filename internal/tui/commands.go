@@ -770,9 +770,9 @@ func (m model) cmdSet(args []string) (tea.Model, tea.Cmd) {
 					return projectSetValidatedMsg{value: value, err: fmt.Errorf("listing projects: %w", err)}
 				}
 				projects := service.FilterSystemProjects(resp.Specs)
-				proj := service.FindProject(projects, value)
-				if proj == nil {
-					return projectSetValidatedMsg{value: value, err: fmt.Errorf("project %q not found. Run: /projects", value)}
+				proj, err := service.ResolveProject(projects, value)
+				if err != nil {
+					return projectSetValidatedMsg{value: value, err: err}
 				}
 				return projectSetValidatedMsg{value: value, project: proj}
 			},
@@ -788,7 +788,7 @@ func (m model) handleProjectSetValidated(msg projectSetValidatedMsg) (tea.Model,
 		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ %v", msg.err)))
 	}
 
-	m.cfg.ProjectID = msg.value
+	m.cfg.ProjectID = msg.project.UUID
 	if err := m.cfg.Save(); err != nil {
 		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to save config: %v", err)))
 	}
@@ -796,7 +796,7 @@ func (m model) handleProjectSetValidated(msg projectSetValidatedMsg) (tea.Model,
 		m.client = api.NewClient(m.cfg)
 	}
 	return m, tea.Sequence(
-		tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project set to: %s (%s)", msg.value, msg.project.Name))),
+		tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project set to: %s (%s)", msg.project.UUID, msg.project.Name))),
 		tea.Println(dimStyle.Render("    You can now start investigating!")),
 	)
 }

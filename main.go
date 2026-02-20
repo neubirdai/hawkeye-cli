@@ -241,15 +241,15 @@ func cmdSet(args []string) error {
 			return fmt.Errorf("listing projects: %w", err)
 		}
 		projects := service.FilterSystemProjects(resp.Specs)
-		proj := service.FindProject(projects, value)
-		if proj == nil {
-			return fmt.Errorf("project %q not found. Run: hawkeye projects", value)
+		proj, err := service.ResolveProject(projects, value)
+		if err != nil {
+			return err
 		}
-		cfg.ProjectID = value
+		cfg.ProjectID = proj.UUID
 		if err := cfg.Save(); err != nil {
 			return err
 		}
-		display.Success(fmt.Sprintf("project set to %s (%s)", value, proj.Name))
+		display.Success(fmt.Sprintf("project set to %s (%s)", proj.UUID, proj.Name))
 		return nil
 	case "token":
 		cfg.Token = value
