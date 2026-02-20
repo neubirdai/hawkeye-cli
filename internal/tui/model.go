@@ -82,12 +82,12 @@ type model struct {
 	//
 	// cotTextActive: true ONLY after we've printed at least one line of
 	//   investigation text. Suppresses progress from breaking mid-paragraph.
-	cotStepActive bool     // true while inside a COT step (header → end)
-	cotTextActive bool     // true once investigation text has been printed for current COT
-	chatStreaming bool     // true while chat response text is actively streaming
-	activeCotID   string   // ID of the COT step we're currently displaying
-	cotStepNum    int      // current COT step number (1-based)
-	lastStatus    string   // latest progress text — shown in spinner line (like web UI status bar)
+	cotStepActive   bool     // true while inside a COT step (header → end)
+	cotTextActive   bool     // true once investigation text has been printed for current COT
+	chatStreaming   bool     // true while chat response text is actively streaming
+	activeCotID     string   // ID of the COT step we're currently displaying
+	cotStepNum      int      // current COT step number (1-based)
+	lastStatus      string   // latest progress text — shown in spinner line (like web UI status bar)
 	pendingProgress []string // progress messages queued during active streaming, flushed on step end
 
 	// Login flow state

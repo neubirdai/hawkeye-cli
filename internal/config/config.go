@@ -12,10 +12,10 @@ const configDir = ".hawkeye"
 const configFile = "config.json"
 
 type Config struct {
-	Server    string `json:"server"`
-	Username  string `json:"username,omitempty"`
-	Token     string `json:"token,omitempty"`
-	OrgUUID   string `json:"org_uuid,omitempty"`
+	Server      string `json:"server"`
+	Username    string `json:"username,omitempty"`
+	Token       string `json:"token,omitempty"`
+	OrgUUID     string `json:"org_uuid,omitempty"`
 	ProjectID   string `json:"project_uuid,omitempty"`
 	LastSession string `json:"last_session,omitempty"`
 	Profile     string `json:"-"`

@@ -2,6 +2,7 @@ package display
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -34,7 +35,7 @@ func Success(text string) {
 }
 
 func Error(text string) {
-	fmt.Printf("%s✗%s %s\n", Red, Reset, text)
+	fmt.Fprintf(os.Stderr, "%s✗%s %s\n", Red, Reset, text)
 }
 
 func Warn(text string) {
