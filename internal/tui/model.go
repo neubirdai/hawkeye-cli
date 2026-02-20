@@ -81,8 +81,8 @@ type model struct {
 
 	// UI state
 	ready        bool
-	cmdMenuIdx   int  // selected index in command menu (-1 = none)
-	cmdMenuOpen  bool // whether the command menu is visible
+	cmdMenuIdx   int    // selected index in command menu (-1 = none)
+	cmdMenuOpen  bool   // whether the command menu is visible
 	lastInputVal string // track input changes to reset menu index
 	profile      string
 }
@@ -517,7 +517,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 				m.seenSources = make(map[string]bool)
 				printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
 				if explanation != "" {
-					printCmds = append(printCmds, tea.Println(dimStyle.Render("     ↳ "+explanation)))
+					printCmds = append(printCmds, tea.Println(cotExplanationStyle.Render("     ↳ "+explanation)))
 				}
 			}
 		}
@@ -615,7 +615,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		return tea.Batch(printCmds...)
 
 	case "CONTENT_TYPE_SESSION_NAME":
-		return tea.Println(dimStyle.Render("  📛 " + msg.text))
+		return tea.Println(sessionNameStyle.Render("  📛 " + msg.text))
 
 	case "CONTENT_TYPE_ERROR_MESSAGE":
 		// Suppressed: these are internal query retry/fix messages (e.g. SQL errors),
