@@ -405,6 +405,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case feedbackResultMsg:
 		return m.handleFeedbackResult(msg)
+
+	case projectSetValidatedMsg:
+		return m.handleProjectSetValidated(msg)
 	}
 
 	// Update sub-components

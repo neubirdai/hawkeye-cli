@@ -9,6 +9,7 @@ import (
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
 	"hawkeye-cli/internal/display"
+	"hawkeye-cli/internal/service"
 	"hawkeye-cli/internal/tui"
 )
 
@@ -231,7 +232,25 @@ func cmdSet(args []string) error {
 	case "server":
 		cfg.Server = value
 	case "project":
-		cfg.ProjectID = value
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		client := api.NewClient(cfg)
+		resp, err := client.ListProjects()
+		if err != nil {
+			return fmt.Errorf("listing projects: %w", err)
+		}
+		projects := service.FilterSystemProjects(resp.Specs)
+		proj, err := service.ResolveProject(projects, value)
+		if err != nil {
+			return err
+		}
+		cfg.ProjectID = proj.UUID
+		if err := cfg.Save(); err != nil {
+			return err
+		}
+		display.Success(fmt.Sprintf("project set to %s (%s)", proj.UUID, proj.Name))
+		return nil
 	case "token":
 		cfg.Token = value
 	case "org":
