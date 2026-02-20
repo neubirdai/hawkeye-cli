@@ -38,4 +38,3 @@ hawkeye set project <your-project-uuid>
 
 #### Investigate
 hawkeye ask "Why is the API returning 500 errors?"
-```
