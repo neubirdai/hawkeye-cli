@@ -589,7 +589,6 @@ func isTrivialContent(text string) bool {
 	if trimmed == "" {
 		return true
 	}
-	// Common placeholders the server sends before real content
 	lower := strings.ToLower(trimmed)
 	return lower == "in progress..." ||
 		lower == "investigating..." ||
@@ -825,6 +824,14 @@ func formatCOTStatus(status string) string {
 
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
 
+func stripHTML(s string) string {
+	s = strings.ReplaceAll(s, "<br/>", "\n")
+	s = strings.ReplaceAll(s, "<br>", "\n")
+	s = strings.ReplaceAll(s, "<br />", "\n")
+	s = htmlTagRe.ReplaceAllString(s, "")
+	return s
+}
+
 func (d *StreamDisplay) handleChatResponse(parts []string, meta *Metadata) {
 	if len(parts) == 0 {
 		return
@@ -903,12 +910,4 @@ func (d *StreamDisplay) finishChatBlock() {
 	d.spinnerMu.Lock()
 	d.contentStreaming = false
 	d.spinnerMu.Unlock()
-}
-
-func stripHTML(s string) string {
-	s = strings.ReplaceAll(s, "<br/>", "\n")
-	s = strings.ReplaceAll(s, "<br>", "\n")
-	s = strings.ReplaceAll(s, "<br />", "\n")
-	s = htmlTagRe.ReplaceAllString(s, "")
-	return s
 }

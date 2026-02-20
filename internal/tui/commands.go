@@ -699,13 +699,7 @@ func (m model) cmdProjects() (tea.Model, tea.Cmd) {
 			if err != nil {
 				return projectsLoadedMsg{err: err}
 			}
-			var projects []api.ProjectSpec
-			for _, p := range resp.Specs {
-				if !strings.Contains(p.Name, "SystemGlobalProject") {
-					projects = append(projects, p)
-				}
-			}
-			return projectsLoadedMsg{projects: projects}
+			return projectsLoadedMsg{projects: service.FilterSystemProjects(resp.Specs)}
 		},
 	)
 }
