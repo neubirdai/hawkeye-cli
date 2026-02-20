@@ -75,15 +75,20 @@ type model struct {
 	seenProgress map[string]bool
 	streamPrompt string // the prompt being streamed
 
-	// Stream interleave protection — narrow flags to avoid suppressing content.
-	// cotTextActive is true ONLY after we've printed at least one line of
-	// investigation text in the current COT step. Reset on cot_end / step change.
-	// This prevents progress/source messages from breaking mid-paragraph,
-	// while still allowing them to print between COT steps and before text starts.
-	cotTextActive bool   // true once investigation text has been printed for current COT
-	chatStreaming bool   // true while chat response text is actively streaming
-	activeCotID   string // ID of the COT step we're currently displaying
-	cotStepNum    int    // current COT step number (1-based)
+	// Stream interleave protection — two-level gating:
+	//
+	// cotStepActive: true from cot_start (or first legacy COT event) to cot_end.
+	//   Suppresses sources from leaking between the COT header and its content.
+	//
+	// cotTextActive: true ONLY after we've printed at least one line of
+	//   investigation text. Suppresses progress from breaking mid-paragraph.
+	cotStepActive bool     // true while inside a COT step (header → end)
+	cotTextActive bool     // true once investigation text has been printed for current COT
+	chatStreaming bool     // true while chat response text is actively streaming
+	activeCotID   string   // ID of the COT step we're currently displaying
+	cotStepNum    int      // current COT step number (1-based)
+	lastStatus    string   // latest progress text — shown in spinner line (like web UI status bar)
+	pendingProgress []string // progress messages queued during active streaming, flushed on step end
 
 	// Login flow state
 	loginURL  string
@@ -309,6 +314,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				flushCmds = append(flushCmds, tea.Println("    "+buf))
 			}
 		}
+		// Flush any progress queued during the final streaming phase
+		flushCmds = append(flushCmds, m.flushPendingProgress()...)
 		flushCmds = append(flushCmds,
 			tea.Println(""),
 			tea.Println(successMsgStyle.Render("  ✓ Investigation complete")),
@@ -390,7 +397,11 @@ func (m model) View() string {
 
 	// Input or streaming indicator
 	if m.mode == modeStreaming {
-		s.WriteString(m.spinner.View() + " Investigating...")
+		status := "Investigating..."
+		if m.lastStatus != "" {
+			status = m.lastStatus
+		}
+		s.WriteString(m.spinner.View() + " " + statusStyle.Render(status))
 	} else {
 		s.WriteString(m.input.View())
 	}
@@ -493,8 +504,11 @@ func (m *model) resetStreamState() {
 	m.seenSources = make(map[string]bool)
 	m.seenProgress = make(map[string]bool)
 	m.streamPrompt = ""
+	m.cotStepActive = false
 	m.cotTextActive = false
 	m.chatStreaming = false
+	m.lastStatus = ""
+	m.pendingProgress = nil
 	m.activeCotID = ""
 	m.cotStepNum = 0
 }
@@ -503,25 +517,31 @@ func (m *model) resetStreamState() {
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	switch msg.contentType {
 
-	// ── Progress: suppress ONLY while investigation text is mid-stream ──
+	// ── Progress: always update spinner, queue during active streaming ───
 	case "CONTENT_TYPE_PROGRESS_STATUS":
+		display := extractProgressDisplay(msg.text)
+		// Always update the spinner line — mirrors the web UI's status bar.
+		m.lastStatus = display
+
+		normKey := normalizeProgress(display)
+		if m.seenProgress[normKey] {
+			return nil // already shown or queued
+		}
+		m.seenProgress[normKey] = true
+
 		if m.cotTextActive || m.chatStreaming {
-			// Swallow progress events while text is being printed to prevent
-			// interleaving. Between COT steps, progress flows normally.
+			// During active text streaming, queue for later to prevent
+			// interleaving mid-paragraph. Will flush on step end.
+			m.pendingProgress = append(m.pendingProgress, display)
 			return nil
 		}
-		display := extractProgressDisplay(msg.text)
-		// Dedup using the display text (what the user sees) + normalize
-		// counted variants like "Found 2 results" vs "Found 3 results"
-		normKey := normalizeProgress(display)
-		if !m.seenProgress[normKey] {
-			m.seenProgress[normKey] = true
-			return tea.Println(statusStyle.Render("  ⟳ " + display))
-		}
+		return tea.Println(statusStyle.Render("  ⟳ " + display))
 
-	// ── Sources: suppress only while investigation text is mid-stream ────
+	// ── Sources: suppress while inside a COT step (header → end) ────────
+	// Sources between COT steps are fine, but within a step they'd break
+	// the visual grouping of header + investigation text.
 	case "CONTENT_TYPE_SOURCES":
-		if m.cotTextActive {
+		if m.cotStepActive || m.chatStreaming {
 			return nil
 		}
 		label := parseSourceLabel(msg.text)
@@ -536,49 +556,53 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 
 	// ── Chat Response ───────────────────────────────────────────────────
 	case "CONTENT_TYPE_CHAT_RESPONSE":
-		// Chat starts → finalize any active COT streaming
-		if m.cotTextActive {
+		var preCmds []tea.Cmd
+
+		// Chat starts → finalize any active COT step and flush queued progress
+		if m.cotStepActive || m.cotTextActive {
 			m.finishCOTStreaming()
 		}
+		// Flush any progress queued during the COT phase (e.g. CheckPlan results)
+		preCmds = append(preCmds, m.flushPendingProgress()...)
+
 		m.chatStreaming = true
 
 		newText := ""
 		if msg.eventType == "chat_delta" {
-			// Delta mode: msg.text IS the new fragment to append
 			newText = msg.text
 			m.chatPrinted += len(newText)
 		} else {
-			// Full text mode: diff against what we've already printed
 			if len(msg.text) > m.chatPrinted {
 				newText = msg.text[m.chatPrinted:]
 				m.chatPrinted = len(msg.text)
 			}
 		}
 		if newText == "" {
+			if len(preCmds) > 0 {
+				return tea.Sequence(preCmds...)
+			}
 			return nil
 		}
 
 		combined := m.chatBuffer + newText
 		lines := strings.Split(combined, "\n")
-		var printCmds []tea.Cmd
 
 		for i, line := range lines {
 			if i < len(lines)-1 {
-				// Complete line — print it
-				printCmds = append(printCmds, tea.Println("  "+line))
+				preCmds = append(preCmds, tea.Println("  "+line))
 			} else {
-				// Partial last line — buffer it
 				m.chatBuffer = line
 			}
 		}
 
-		if len(printCmds) > 0 {
-			return tea.Sequence(printCmds...)
+		if len(preCmds) > 0 {
+			return tea.Sequence(preCmds...)
 		}
 
 	case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
 		// Follow-ups arrive after chat response is done
 		m.chatStreaming = false
+		m.cotStepActive = false
 		m.cotTextActive = false
 
 		parts := strings.Split(msg.text, "\n")
@@ -627,9 +651,12 @@ func (m *model) handleCOTChunk(msg streamChunkMsg) tea.Cmd {
 		// Flush the previous COT step's buffer
 		flushCmds := m.flushCOTBuffer(m.activeCotID)
 		printCmds = append(printCmds, flushCmds...)
+		m.cotStepActive = false
+		m.cotTextActive = false
+		// Print any progress that was queued during the previous step
+		printCmds = append(printCmds, m.flushPendingProgress()...)
 		// Add a blank line separator between COT steps
 		printCmds = append(printCmds, tea.Println(""))
-		m.cotTextActive = false
 	}
 
 	// Track the active COT ID
@@ -670,8 +697,9 @@ func (m *model) handleCOTChunk(msg streamChunkMsg) tea.Cmd {
 
 	switch msg.eventType {
 	case "cot_start":
-		// Just show header, don't set cotTextActive yet — no text has printed.
-		// Progress/sources can still flow between cot_start and first cot_delta.
+		// Mark step as active — suppresses sources until cot_end.
+		// Don't set cotTextActive yet — progress can still show before first delta.
+		m.cotStepActive = true
 		showHeader()
 
 	case "cot_delta":
@@ -688,11 +716,15 @@ func (m *model) handleCOTChunk(msg streamChunkMsg) tea.Cmd {
 		// Flush remaining buffer for this COT
 		flushCmds := m.flushCOTBuffer(cotID)
 		printCmds = append(printCmds, flushCmds...)
+		m.cotStepActive = false
 		m.cotTextActive = false
+		// Print any progress that was queued during this step
+		printCmds = append(printCmds, m.flushPendingProgress()...)
 
 	default:
 		// Legacy non-delta: investigation contains full accumulated text.
 		// stream.go now sends only the active (IN_PROGRESS) step.
+		m.cotStepActive = true
 		showHeader()
 
 		// Filter only exact placeholder text in legacy mode (full text, not fragments)
@@ -719,11 +751,10 @@ func (m *model) finishCOTStreaming() {
 	if m.activeCotID != "" {
 		buf := m.getCOTBuffer(m.activeCotID)
 		if buf != "" && strings.TrimSpace(buf) != "" {
-			// Can't return a tea.Cmd here, so just clear the buffer.
-			// The buffer will be flushed by the caller if needed.
 			m.setCOTBuffer(m.activeCotID, "")
 		}
 	}
+	m.cotStepActive = false
 	m.cotTextActive = false
 }
 
@@ -736,6 +767,20 @@ func (m *model) flushCOTBuffer(cotID string) []tea.Cmd {
 		cmds = append(cmds, tea.Println("    "+buf))
 		m.setCOTBuffer(cotID, "")
 	}
+	return cmds
+}
+
+// flushPendingProgress prints any progress messages that were queued during
+// active COT/chat streaming. Called on step transitions and stream end.
+func (m *model) flushPendingProgress() []tea.Cmd {
+	if len(m.pendingProgress) == 0 {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, display := range m.pendingProgress {
+		cmds = append(cmds, tea.Println(statusStyle.Render("  ⟳ "+display)))
+	}
+	m.pendingProgress = nil
 	return cmds
 }
 
