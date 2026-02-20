@@ -6,6 +6,58 @@ import (
 	"hawkeye-cli/internal/api"
 )
 
+func TestFindProject(t *testing.T) {
+	projects := []api.ProjectSpec{
+		{Name: "Production", UUID: "prod-uuid"},
+		{Name: "Staging", UUID: "staging-uuid"},
+	}
+
+	tests := []struct {
+		name     string
+		projects []api.ProjectSpec
+		uuid     string
+		wantName string
+		wantNil  bool
+	}{
+		{
+			name:     "found",
+			projects: projects,
+			uuid:     "staging-uuid",
+			wantName: "Staging",
+		},
+		{
+			name:     "not found",
+			projects: projects,
+			uuid:     "bogus-uuid",
+			wantNil:  true,
+		},
+		{
+			name:     "empty list",
+			projects: nil,
+			uuid:     "any-uuid",
+			wantNil:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FindProject(tt.projects, tt.uuid)
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("expected nil, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("expected non-nil result")
+			}
+			if got.Name != tt.wantName {
+				t.Errorf("got name %q, want %q", got.Name, tt.wantName)
+			}
+		})
+	}
+}
+
 func TestFilterSystemProjects(t *testing.T) {
 	tests := []struct {
 		name    string

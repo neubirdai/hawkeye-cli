@@ -6,6 +6,7 @@ import (
 
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
+	"hawkeye-cli/internal/service"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -735,6 +736,12 @@ func (m model) handleProjectsLoaded(msg projectsLoadedMsg) (tea.Model, tea.Cmd) 
 
 // ─── /set ───────────────────────────────────────────────────────────────────
 
+type projectSetValidatedMsg struct {
+	value   string
+	project *api.ProjectSpec
+	err     error
+}
+
 func (m model) cmdSet(args []string) (tea.Model, tea.Cmd) {
 	if len(args) < 2 {
 		return m, tea.Sequence(
@@ -749,24 +756,49 @@ func (m model) cmdSet(args []string) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "project":
-		if m.cfg == nil {
+		if m.client == nil {
 			return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
 		}
-		m.cfg.ProjectID = value
-		if err := m.cfg.Save(); err != nil {
-			return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to save config: %v", err)))
-		}
-		if m.cfg.Server != "" && m.cfg.Token != "" {
-			m.client = api.NewClient(m.cfg)
-		}
+
+		client := m.client
+
 		return m, tea.Sequence(
-			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project set to: %s", value))),
-			tea.Println(dimStyle.Render("    You can now start investigating!")),
+			tea.Println(statusStyle.Render("  ⟳ Validating project...")),
+			func() tea.Msg {
+				resp, err := client.ListProjects()
+				if err != nil {
+					return projectSetValidatedMsg{value: value, err: fmt.Errorf("listing projects: %w", err)}
+				}
+				projects := service.FilterSystemProjects(resp.Specs)
+				proj := service.FindProject(projects, value)
+				if proj == nil {
+					return projectSetValidatedMsg{value: value, err: fmt.Errorf("project %q not found. Run: /projects", value)}
+				}
+				return projectSetValidatedMsg{value: value, project: proj}
+			},
 		)
 
 	default:
 		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Unknown key: %s (valid: project)", key)))
 	}
+}
+
+func (m model) handleProjectSetValidated(msg projectSetValidatedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ %v", msg.err)))
+	}
+
+	m.cfg.ProjectID = msg.value
+	if err := m.cfg.Save(); err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to save config: %v", err)))
+	}
+	if m.cfg.Server != "" && m.cfg.Token != "" {
+		m.client = api.NewClient(m.cfg)
+	}
+	return m, tea.Sequence(
+		tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project set to: %s (%s)", msg.value, msg.project.Name))),
+		tea.Println(dimStyle.Render("    You can now start investigating!")),
+	)
 }
 
 // ─── /session ───────────────────────────────────────────────────────────────
