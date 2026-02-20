@@ -185,31 +185,6 @@ func TestIsTrivialContent(t *testing.T) {
 	}
 }
 
-func TestIsSQLRetryError(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  bool
-	}{
-		{"empty", "", false},
-		{"column not found", `column "foo" does not exist`, true},
-		{"LINE 1 error", "ERROR: syntax error at LINE 1: SELECT", true},
-		{"HINT error", "HINT: Perhaps you meant to reference", true},
-		{"SQL with error", "SELECT * FROM foo error", true},
-		{"normal error", "connection timeout", false},
-		{"application error", "user not found", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isSQLRetryError(tt.input)
-			if got != tt.want {
-				t.Errorf("isSQLRetryError(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestFormatSourceLabel(t *testing.T) {
 	tests := []struct {
 		name  string

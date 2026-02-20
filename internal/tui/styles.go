@@ -72,10 +72,6 @@ var (
 		lipgloss.Color("250"), // light gray for dark bg (visible!)
 		lipgloss.Color("240"), // darker gray for light bg
 	)
-	colorLightGray = adaptiveColor(
-		lipgloss.Color("252"), // very light for dark bg
-		lipgloss.Color("245"), // medium for light bg
-	)
 	colorDimGray = adaptiveColor(
 		lipgloss.Color("245"), // medium gray for dark bg
 		lipgloss.Color("250"), // lighter for light bg (less contrast needed)
@@ -95,10 +91,6 @@ var logoBodyStyle = lipgloss.NewStyle().
 
 var logoBeakStyle = lipgloss.NewStyle().
 	Foreground(colorOrange)
-
-var logoEyeStyle = lipgloss.NewStyle().
-	Foreground(colorWhite).
-	Bold(true)
 
 var logoTitleStyle = lipgloss.NewStyle().
 	Bold(true).
@@ -128,9 +120,6 @@ var hintBarStyle = lipgloss.NewStyle().
 var hintKeyStyle = lipgloss.NewStyle().
 	Foreground(colorGray).
 	Bold(true)
-
-var dimHintStyle = lipgloss.NewStyle().
-	Foreground(colorDimGray)
 
 // Command menu styles
 var cmdNameStyle = lipgloss.NewStyle().
@@ -188,10 +177,6 @@ var followUpStyle = lipgloss.NewStyle().
 
 var dimStyle = lipgloss.NewStyle().
 	Foreground(colorGray)
-
-// Visible dim style — for text that needs to be readable but secondary
-var visibleDimStyle = lipgloss.NewStyle().
-	Foreground(colorLightGray)
 
 var separatorStyle = lipgloss.NewStyle().
 	Foreground(colorDimGray)
