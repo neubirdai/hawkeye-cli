@@ -85,6 +85,11 @@ type model struct {
 	cmdMenuOpen  bool   // whether the command menu is visible
 	lastInputVal string // track input changes to reset menu index
 	profile      string
+
+	// Command history
+	history      []string // stored command history
+	historyIdx   int      // current position in history (-1 = not browsing)
+	historySaved string   // saved input value when entering history mode
 }
 
 func initialModel(version, profile string) model {
@@ -120,6 +125,8 @@ func initialModel(version, profile string) model {
 		cotDescShown: make(map[string]bool),
 		seenSources:  make(map[string]bool),
 		seenProgress: make(map[string]bool),
+		history:      make([]string, 0),
+		historyIdx:   -1,
 	}
 }
 
@@ -186,25 +193,58 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyUp:
-			if m.mode == modeIdle && m.cmdMenuOpen {
-				matches := matchCommands(m.input.Value())
-				if len(matches) > 0 {
-					m.cmdMenuIdx--
-					if m.cmdMenuIdx < 0 {
-						m.cmdMenuIdx = len(matches) - 1
+			if m.mode == modeIdle {
+				if m.cmdMenuOpen {
+					matches := matchCommands(m.input.Value())
+					if len(matches) > 0 {
+						m.cmdMenuIdx--
+						if m.cmdMenuIdx < 0 {
+							m.cmdMenuIdx = len(matches) - 1
+						}
+						return m, nil
 					}
+				} else if len(m.history) > 0 {
+					// Navigate command history
+					if m.historyIdx == -1 {
+						// Entering history mode - save current input
+						m.historySaved = m.input.Value()
+						m.historyIdx = len(m.history) - 1
+					} else {
+						// Move up in history
+						m.historyIdx--
+						if m.historyIdx < 0 {
+							m.historyIdx = 0
+						}
+					}
+					m.input.SetValue(m.history[m.historyIdx])
+					m.input.CursorEnd()
 					return m, nil
 				}
 			}
 
 		case tea.KeyDown:
-			if m.mode == modeIdle && m.cmdMenuOpen {
-				matches := matchCommands(m.input.Value())
-				if len(matches) > 0 {
-					m.cmdMenuIdx++
-					if m.cmdMenuIdx >= len(matches) {
-						m.cmdMenuIdx = 0
+			if m.mode == modeIdle {
+				if m.cmdMenuOpen {
+					matches := matchCommands(m.input.Value())
+					if len(matches) > 0 {
+						m.cmdMenuIdx++
+						if m.cmdMenuIdx >= len(matches) {
+							m.cmdMenuIdx = 0
+						}
+						return m, nil
 					}
+				} else if m.historyIdx != -1 {
+					// Navigate down in history
+					m.historyIdx++
+					if m.historyIdx >= len(m.history) {
+						// Exit history mode - restore saved input
+						m.historyIdx = -1
+						m.input.SetValue(m.historySaved)
+						m.historySaved = ""
+					} else {
+						m.input.SetValue(m.history[m.historyIdx])
+					}
+					m.input.CursorEnd()
 					return m, nil
 				}
 			}
@@ -242,6 +282,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if value == "" {
 				return m, nil
 			}
+
+			// Add to history (avoid duplicates if same as last command)
+			if len(m.history) == 0 || m.history[len(m.history)-1] != value {
+				m.history = append(m.history, value)
+				// Limit history size to 1000 entries
+				if len(m.history) > 1000 {
+					m.history = m.history[len(m.history)-1000:]
+				}
+			}
+			m.historyIdx = -1
+			m.historySaved = ""
 
 			m.input.SetValue("")
 			m.cmdMenuOpen = false
@@ -346,6 +397,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	newVal := m.input.Value()
 	if newVal != m.lastInputVal {
 		m.lastInputVal = newVal
+		// Exit history mode when user types (manually edits input)
+		if m.historyIdx != -1 {
+			// If input doesn't match current history item, exit history mode
+			if m.historyIdx < len(m.history) && m.history[m.historyIdx] != newVal {
+				m.historyIdx = -1
+				m.historySaved = ""
+			}
+		}
 		if strings.HasPrefix(newVal, "/") {
 			m.cmdMenuOpen = true
 			m.cmdMenuIdx = 0
