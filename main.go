@@ -112,7 +112,7 @@ func cmdLogin(args []string) error {
 		fmt.Println("Usage: hawkeye login <url> -u <username> -p <password>")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  hawkeye login https://littlebird.app.neubird.ai/ -u user@company.com -p pass")
+		fmt.Println("  hawkeye login https://myenv.app.neubird.ai/ -u user@company.com -p pass")
 		fmt.Println("  hawkeye login http://localhost:3000 -u admin@company.com -p mypassword")
 		return nil
 	}

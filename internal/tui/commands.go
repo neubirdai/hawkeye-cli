@@ -109,7 +109,7 @@ func (m model) cmdLogin(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	m.mode = modeLoginURL
-	m.input.Placeholder = "Server URL (e.g. https://littlebird.app.neubird.ai/)..."
+	m.input.Placeholder = "Server URL (e.g. https://myenv.app.neubird.ai/)..."
 	m.input.SetValue("")
 	return m, tea.Println(dimStyle.Render("  Enter the Hawkeye server URL:"))
 }
