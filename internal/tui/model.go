@@ -75,6 +75,16 @@ type model struct {
 	seenProgress map[string]bool
 	streamPrompt string // the prompt being streamed
 
+	// Stream interleave protection — narrow flags to avoid suppressing content.
+	// cotTextActive is true ONLY after we've printed at least one line of
+	// investigation text in the current COT step. Reset on cot_end / step change.
+	// This prevents progress/source messages from breaking mid-paragraph,
+	// while still allowing them to print between COT steps and before text starts.
+	cotTextActive bool   // true once investigation text has been printed for current COT
+	chatStreaming bool   // true while chat response text is actively streaming
+	activeCotID   string // ID of the COT step we're currently displaying
+	cotStepNum    int    // current COT step number (1-based)
+
 	// Login flow state
 	loginURL  string
 	loginUser string
@@ -287,18 +297,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessionID = msg.sessionID
 		}
 		// Flush any remaining chat buffer
+		var flushCmds []tea.Cmd
 		if m.chatBuffer != "" {
-			cmds = append(cmds, tea.Println("  "+m.chatBuffer))
+			flushCmds = append(flushCmds, tea.Println("  "+m.chatBuffer))
 			m.chatBuffer = ""
 		}
-		cmds = append(cmds, tea.Sequence(
+		// Flush any remaining COT buffer
+		if m.activeCotID != "" {
+			buf := m.getCOTBuffer(m.activeCotID)
+			if buf != "" && strings.TrimSpace(buf) != "" {
+				flushCmds = append(flushCmds, tea.Println("    "+buf))
+			}
+		}
+		flushCmds = append(flushCmds,
 			tea.Println(""),
 			tea.Println(successMsgStyle.Render("  ✓ Investigation complete")),
 			tea.Println(dimStyle.Render(fmt.Sprintf("    Session: %s", m.sessionID))),
 			tea.Println(""),
-		))
+		)
 		m.resetStreamState()
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(append(cmds, tea.Sequence(flushCmds...))...)
 
 	case streamErrMsg:
 		m.mode = modeIdle
@@ -475,105 +493,55 @@ func (m *model) resetStreamState() {
 	m.seenSources = make(map[string]bool)
 	m.seenProgress = make(map[string]bool)
 	m.streamPrompt = ""
+	m.cotTextActive = false
+	m.chatStreaming = false
+	m.activeCotID = ""
+	m.cotStepNum = 0
 }
 
 // handleStreamChunk processes a streaming event and returns a tea.Println command.
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	switch msg.contentType {
+
+	// ── Progress: suppress ONLY while investigation text is mid-stream ──
 	case "CONTENT_TYPE_PROGRESS_STATUS":
+		if m.cotTextActive || m.chatStreaming {
+			// Swallow progress events while text is being printed to prevent
+			// interleaving. Between COT steps, progress flows normally.
+			return nil
+		}
 		display := extractProgressDisplay(msg.text)
-		if !m.seenProgress[display] {
-			m.seenProgress[display] = true
+		// Dedup using the display text (what the user sees) + normalize
+		// counted variants like "Found 2 results" vs "Found 3 results"
+		normKey := normalizeProgress(display)
+		if !m.seenProgress[normKey] {
+			m.seenProgress[normKey] = true
 			return tea.Println(statusStyle.Render("  ⟳ " + display))
 		}
 
+	// ── Sources: suppress only while investigation text is mid-stream ────
 	case "CONTENT_TYPE_SOURCES":
+		if m.cotTextActive {
+			return nil
+		}
 		label := parseSourceLabel(msg.text)
 		if !m.seenSources[label] {
 			m.seenSources[label] = true
 			return tea.Println(sourceHeaderStyle.Render("  📎 ") + label)
 		}
 
+	// ── Chain of Thought ────────────────────────────────────────────────
 	case "CONTENT_TYPE_CHAIN_OF_THOUGHT":
-		id, desc, explanation, investigation, _ := parseCOTFields(msg.text)
-		cotID := id
-		if cotID == "" {
-			cotID = desc
-		}
-		if cotID == "" {
-			cotID = "_default"
-		}
+		return m.handleCOTChunk(msg)
 
-		var printCmds []tea.Cmd
-
-		// Helper: show header if not yet shown for this COT.
-		// Explanation (short summary) is the bold header line;
-		// Description (detailed scope) is the dim detail beneath.
-		showHeader := func() {
-			if !m.cotDescShown[cotID] && desc != "" {
-				m.cotDescShown[cotID] = true
-				// Reset progress and source dedup so they repeat for each COT step
-				m.seenProgress = make(map[string]bool)
-				m.seenSources = make(map[string]bool)
-				printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render("  🔍 "+desc)))
-				if explanation != "" {
-					printCmds = append(printCmds, tea.Println(cotExplanationStyle.Render("     ↳ "+explanation)))
-				}
-			}
-		}
-
-		// Helper: print text line-by-line with buffering for partial lines
-		printLines := func(text string) {
-			combined := m.getCOTBuffer(cotID) + text
-			lines := strings.Split(combined, "\n")
-			for i, line := range lines {
-				if i < len(lines)-1 {
-					if strings.TrimSpace(line) != "" {
-						printCmds = append(printCmds, tea.Println("    "+line))
-					}
-				} else {
-					m.setCOTBuffer(cotID, line)
-				}
-			}
-		}
-
-		switch msg.eventType {
-		case "cot_start":
-			showHeader()
-
-		case "cot_delta":
-			showHeader()
-			// Delta mode: investigation IS the new text to append
-			if investigation != "" {
-				printLines(investigation)
-			}
-
-		case "cot_end":
-			// Flush remaining buffer for this COT
-			buf := m.getCOTBuffer(cotID)
-			if buf != "" && strings.TrimSpace(buf) != "" {
-				printCmds = append(printCmds, tea.Println("    "+buf))
-				m.setCOTBuffer(cotID, "")
-			}
-
-		default:
-			// Legacy non-delta: investigation contains full accumulated text
-			showHeader()
-			if investigation != "" {
-				prev := m.cotAccum[cotID]
-				if len(investigation) > len(prev) {
-					newText := investigation[len(prev):]
-					m.cotAccum[cotID] = investigation
-					printLines(newText)
-				}
-			}
-		}
-
-		if len(printCmds) > 0 {
-			return tea.Sequence(printCmds...)
-		}
-
+	// ── Chat Response ───────────────────────────────────────────────────
 	case "CONTENT_TYPE_CHAT_RESPONSE":
+		// Chat starts → finalize any active COT streaming
+		if m.cotTextActive {
+			m.finishCOTStreaming()
+		}
+		m.chatStreaming = true
+
 		newText := ""
 		if msg.eventType == "chat_delta" {
 			// Delta mode: msg.text IS the new fragment to append
@@ -609,6 +577,10 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		}
 
 	case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
+		// Follow-ups arrive after chat response is done
+		m.chatStreaming = false
+		m.cotTextActive = false
+
 		parts := strings.Split(msg.text, "\n")
 		var printCmds []tea.Cmd
 		printCmds = append(printCmds, tea.Println(""))
@@ -632,6 +604,171 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	}
 
 	return nil
+}
+
+// handleCOTChunk handles chain-of-thought events with proper step tracking
+// and trivial content filtering.
+func (m *model) handleCOTChunk(msg streamChunkMsg) tea.Cmd {
+	id, desc, explanation, investigation, _ := parseCOTFields(msg.text)
+	cotID := id
+	if cotID == "" {
+		cotID = desc
+	}
+	if cotID == "" {
+		cotID = "_default"
+	}
+
+	var printCmds []tea.Cmd
+
+	// Detect new COT step: if the ID changed from what we're tracking,
+	// finalize the previous step and start a new one.
+	isNewStep := m.activeCotID != "" && cotID != m.activeCotID
+	if isNewStep {
+		// Flush the previous COT step's buffer
+		flushCmds := m.flushCOTBuffer(m.activeCotID)
+		printCmds = append(printCmds, flushCmds...)
+		// Add a blank line separator between COT steps
+		printCmds = append(printCmds, tea.Println(""))
+		m.cotTextActive = false
+	}
+
+	// Track the active COT ID
+	if m.activeCotID != cotID {
+		m.activeCotID = cotID
+	}
+
+	// Helper: show header if not yet shown for this COT.
+	showHeader := func() {
+		if !m.cotDescShown[cotID] && desc != "" {
+			m.cotDescShown[cotID] = true
+			m.cotStepNum++
+			// Do NOT reset seenProgress/seenSources here — that causes
+			// duplicate progress messages across COT steps.
+			printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render(
+				fmt.Sprintf("  🔍 %s", desc))))
+			if explanation != "" {
+				printCmds = append(printCmds, tea.Println(cotExplanationStyle.Render(
+					"     ↳ "+explanation)))
+			}
+		}
+	}
+
+	// Helper: print text line-by-line with buffering for partial lines
+	printLines := func(text string) {
+		combined := m.getCOTBuffer(cotID) + text
+		lines := strings.Split(combined, "\n")
+		for i, line := range lines {
+			if i < len(lines)-1 {
+				if strings.TrimSpace(line) != "" {
+					printCmds = append(printCmds, tea.Println("    "+line))
+				}
+			} else {
+				m.setCOTBuffer(cotID, line)
+			}
+		}
+	}
+
+	switch msg.eventType {
+	case "cot_start":
+		// Just show header, don't set cotTextActive yet — no text has printed.
+		// Progress/sources can still flow between cot_start and first cot_delta.
+		showHeader()
+
+	case "cot_delta":
+		showHeader()
+		// Delta mode: investigation IS the new text to append.
+		// Do NOT filter with isTrivialContent — deltas are short fragments
+		// that are part of real content, not placeholders.
+		if investigation != "" {
+			m.cotTextActive = true
+			printLines(investigation)
+		}
+
+	case "cot_end":
+		// Flush remaining buffer for this COT
+		flushCmds := m.flushCOTBuffer(cotID)
+		printCmds = append(printCmds, flushCmds...)
+		m.cotTextActive = false
+
+	default:
+		// Legacy non-delta: investigation contains full accumulated text.
+		// stream.go now sends only the active (IN_PROGRESS) step.
+		showHeader()
+
+		// Filter only exact placeholder text in legacy mode (full text, not fragments)
+		if investigation != "" && !isTrivialContent(investigation) {
+			prev := m.cotAccum[cotID]
+			if len(investigation) > len(prev) {
+				m.cotTextActive = true
+				newText := investigation[len(prev):]
+				m.cotAccum[cotID] = investigation
+				printLines(newText)
+			}
+		}
+	}
+
+	if len(printCmds) > 0 {
+		return tea.Sequence(printCmds...)
+	}
+
+	return nil
+}
+
+// finishCOTStreaming flushes the active COT step and marks streaming as done.
+func (m *model) finishCOTStreaming() {
+	if m.activeCotID != "" {
+		buf := m.getCOTBuffer(m.activeCotID)
+		if buf != "" && strings.TrimSpace(buf) != "" {
+			// Can't return a tea.Cmd here, so just clear the buffer.
+			// The buffer will be flushed by the caller if needed.
+			m.setCOTBuffer(m.activeCotID, "")
+		}
+	}
+	m.cotTextActive = false
+}
+
+// flushCOTBuffer flushes the line buffer for a given COT ID and returns
+// any tea.Cmd needed to print remaining content.
+func (m *model) flushCOTBuffer(cotID string) []tea.Cmd {
+	var cmds []tea.Cmd
+	buf := m.getCOTBuffer(cotID)
+	if buf != "" && strings.TrimSpace(buf) != "" {
+		cmds = append(cmds, tea.Println("    "+buf))
+		m.setCOTBuffer(cotID, "")
+	}
+	return cmds
+}
+
+// isTrivialContent checks if the text is just a placeholder/status message
+// that shouldn't be displayed as investigation content.
+// Only filters exact placeholder strings the server sends before real content.
+// IMPORTANT: Do NOT filter by length — delta fragments are short but real.
+func isTrivialContent(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	return lower == "in progress..." ||
+		lower == "investigating..." ||
+		lower == "analyzing..." ||
+		lower == "thinking..."
+}
+
+// normalizeProgress deduplicates progress messages that differ only in counts.
+// Operates on the display text (after extractProgressDisplay), e.g.:
+// "Found 2 results" and "Found 3 results" → same key.
+func normalizeProgress(display string) string {
+	if strings.HasPrefix(display, "Found ") && strings.HasSuffix(display, " results") {
+		return "Found N results"
+	}
+	if strings.Contains(display, "result streams") {
+		return "Analyzing N result streams"
+	}
+	if strings.Contains(display, "datas") && strings.Contains(display, "ources") {
+		return "Selected N data sources"
+	}
+	return display
 }
 
 // COT line buffer per ID (stored in cotAccum with a special prefix)

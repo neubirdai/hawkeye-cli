@@ -94,9 +94,13 @@ func beginStream(client *api.Client, projectID, sessionID, prompt string) tea.Cm
 						ch <- streamChunkMsg{contentType: ct, eventType: et, text: parts[0], raw: resp}
 					}
 				default:
-					// Legacy: all COT steps are in parts[], send each
-					for _, raw := range parts {
-						ch <- streamChunkMsg{contentType: ct, eventType: et, text: raw, raw: resp}
+					// Legacy: server sends ALL COT steps in parts[].
+					// Parse all parts, find the IN_PROGRESS step (the one
+					// actively being investigated), and send only that one.
+					// This mirrors what stream_display.go does.
+					activePart := findActiveCOTPart(parts)
+					if activePart != "" {
+						ch <- streamChunkMsg{contentType: ct, eventType: et, text: activePart, raw: resp}
 					}
 				}
 
@@ -199,7 +203,7 @@ func parseSourceLabel(raw string) string {
 	return name
 }
 
-// parseCOTInvestigation extracts the investigation text from COT JSON.
+// parseCOTFields extracts the investigation text from COT JSON.
 func parseCOTFields(raw string) (id, description, explanation, investigation, status string) {
 	var cot struct {
 		ID            string `json:"id"`
@@ -217,4 +221,34 @@ func parseCOTFields(raw string) (id, description, explanation, investigation, st
 		st = cot.Status
 	}
 	return cot.ID, cot.Description, cot.Explanation, cot.Investigation, st
+}
+
+// findActiveCOTPart parses all COT JSON parts from a legacy event and returns
+// the raw JSON string for the IN_PROGRESS step. Falls back to the last step.
+// This prevents the TUI from processing every completed step on every event.
+func findActiveCOTPart(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+
+	type cotInfo struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+
+	bestIdx := len(parts) - 1 // fallback: last part
+	for i, raw := range parts {
+		var c cotInfo
+		if err := json.Unmarshal([]byte(raw), &c); err != nil {
+			continue
+		}
+		if c.Status == "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS" || c.Status == "IN_PROGRESS" {
+			bestIdx = i
+			break
+		}
+	}
+	return parts[bestIdx]
 }
