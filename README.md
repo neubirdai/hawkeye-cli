@@ -183,7 +183,7 @@ Additional endpoints (ratings, file uploads, instructions, xray, watch, incident
 
 
 
-[![Watch Hawkeye CLI Demo](https://www.youtube.com/watch?v=gjo4dh92Q6w)](https://www.youtube.com/watch?v=gjo4dh92Q6w)
+[![Watch Hawkeye CLI Demo](https://i9.ytimg.com/vi/gjo4dh92Q6w/mq1.jpg?sqp=CKyV38wG&rs=AOn4CLDxKq9PaSex7v3P5YwjFGJRI-nxMg)](https://www.youtube.com/watch?v=gjo4dh92Q6w)
 
 
 ## License
