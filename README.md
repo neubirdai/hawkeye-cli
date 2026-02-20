@@ -178,6 +178,14 @@ This CLI currently covers the core investigation workflow:
 
 Additional endpoints (ratings, file uploads, instructions, xray, watch, incidents, etc.) can be added as needed.
 
+## Demo
+
+
+
+
+[![Watch Hawkeye CLI Demo](https://www.youtube.com/watch?v=gjo4dh92Q6w)](https://www.youtube.com/watch?v=gjo4dh92Q6w)
+
+
 ## License
 
 MIT
