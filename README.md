@@ -27,17 +27,51 @@ alias hawkeye='go run github.com/neubirdai/hawkeye-cli@latest'
 
 ### Usage
 
-#### Login
+```bash
+# Login
 hawkeye login https://your-hawkeye.app.neubird.ai -u you@company.com -p 'your-password'
 
-#### List Projects
+# List projects and set active project
 hawkeye projects
-
-#### Set project
 hawkeye set project <your-project-uuid>
 
-#### Investigate
+# Run an AI-powered investigation
 hawkeye ask "Why is the API returning 500 errors?"
+
+# Continue in an existing session
+hawkeye ask "Check DB connections" -s <session-uuid>
+
+# Browse and filter sessions
+hawkeye sessions
+hawkeye sessions --uninvestigated
+hawkeye sessions --status investigated --from 2025-01-01
+
+# View session details
+hawkeye inspect <session-uuid>
+hawkeye summary <session-uuid>
+hawkeye score <session-uuid>
+hawkeye link <session-uuid>
+
+# Org-wide analytics
+hawkeye report
+
+# Data source connections
+hawkeye connections
+hawkeye connections resources <connection-uuid>
+
+# Interactive mode (default when no command given)
+hawkeye
+```
+
+### Profiles
+
+Use named profiles to manage multiple environments:
+
+```bash
+hawkeye --profile staging login https://staging.app.neubird.ai -u user@co.com -p pass
+hawkeye --profile staging sessions
+hawkeye profiles   # list all profiles
+```
 
 ## Demo
 
