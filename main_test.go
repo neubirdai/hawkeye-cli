@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -165,6 +166,91 @@ func TestTruncate(t *testing.T) {
 			}
 			if tt.max > 3 && len(tt.s) > tt.max && !strings.HasSuffix(got, "...") {
 				t.Errorf("truncate(%q, %d) = %q, expected ... suffix for truncated string", tt.s, tt.max, got)
+			}
+		})
+	}
+}
+
+func TestPrintJSON(t *testing.T) {
+	input := map[string]any{
+		"name":  "test",
+		"count": float64(42),
+	}
+
+	data, err := json.MarshalIndent(input, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent failed: %v", err)
+	}
+	output := string(data)
+
+	// Verify it round-trips
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
+		t.Fatalf("round-trip unmarshal failed: %v", err)
+	}
+	if decoded["name"] != "test" {
+		t.Errorf("name = %v, want %q", decoded["name"], "test")
+	}
+	if decoded["count"] != float64(42) {
+		t.Errorf("count = %v, want %v", decoded["count"], 42)
+	}
+}
+
+func TestParseGlobalFlagsJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantJSON bool
+		wantArgs []string
+	}{
+		{
+			name:     "short flag -j",
+			args:     []string{"-j", "sessions"},
+			wantJSON: true,
+			wantArgs: []string{"sessions"},
+		},
+		{
+			name:     "long flag --json",
+			args:     []string{"--json", "config"},
+			wantJSON: true,
+			wantArgs: []string{"config"},
+		},
+		{
+			name:     "json after command",
+			args:     []string{"projects", "-j"},
+			wantJSON: true,
+			wantArgs: []string{"projects"},
+		},
+		{
+			name:     "json with profile",
+			args:     []string{"--profile", "staging", "-j", "sessions"},
+			wantJSON: true,
+			wantArgs: []string{"sessions"},
+		},
+		{
+			name:     "no json flag",
+			args:     []string{"sessions"},
+			wantJSON: false,
+			wantArgs: []string{"sessions"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			activeProfile = ""
+			jsonOutput = false
+			got := parseGlobalFlags(tt.args)
+			if jsonOutput != tt.wantJSON {
+				t.Errorf("jsonOutput = %v, want %v", jsonOutput, tt.wantJSON)
+			}
+			if len(got) != len(tt.wantArgs) {
+				t.Errorf("remaining args = %v, want %v", got, tt.wantArgs)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.wantArgs[i] {
+					t.Errorf("arg[%d] = %q, want %q", i, got[i], tt.wantArgs[i])
+				}
 			}
 		})
 	}
