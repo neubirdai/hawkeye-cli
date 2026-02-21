@@ -3,7 +3,7 @@ VERSION=0.1.0
 
 DOCKER_REPO=neubirdai/hawkeye-cli
 
-.PHONY: build clean install test lint check docker docker-push
+.PHONY: build clean install test lint check docker docker-push snap snap-upload
 
 build:
 	go build -ldflags="-s -w" -o $(BINARY) .
@@ -35,3 +35,9 @@ docker:
 
 docker-push:
 	docker buildx build --platform linux/amd64,linux/arm64 -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest --push .
+
+snap:
+	snapcraft pack
+
+snap-upload:
+	snapcraft upload $(BINARY)-cli_$(VERSION)_*.snap --release=edge

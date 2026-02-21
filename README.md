@@ -37,6 +37,12 @@ Docker with settings in a volume
 docker run --rm -it -v ...:/root/.hawkeye neubirdai/hawkeye-cli
 ```
 
+Snap
+
+```bash
+snap install hawkeye-cli
+```
+
 ### Usage
 
 ```bash
