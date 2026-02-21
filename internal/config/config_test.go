@@ -215,6 +215,33 @@ func TestProfileIsolation(t *testing.T) {
 	}
 }
 
+func TestConfigPathSnap(t *testing.T) {
+	snapDir := t.TempDir()
+	t.Setenv("SNAP_USER_COMMON", snapDir)
+
+	original := &Config{
+		Server:  "http://example.com",
+		Token:   "tok",
+		Profile: "",
+	}
+	if err := original.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	expected := filepath.Join(snapDir, configDir, configFile)
+	if _, err := os.Stat(expected); err != nil {
+		t.Fatalf("config not written to snap path %s: %v", expected, err)
+	}
+
+	loaded, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Server != original.Server {
+		t.Errorf("Server = %q, want %q", loaded.Server, original.Server)
+	}
+}
+
 func TestProfileName(t *testing.T) {
 	tests := []struct {
 		profile string
