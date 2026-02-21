@@ -40,10 +40,13 @@ make check      # Run lint then test — the single command to validate everythi
 | Package | Test file | What's tested |
 |---------|-----------|---------------|
 | `main` | `main_test.go` | `wrapText`, `truncate` |
-| `internal/api` | `client_test.go` | `IsDeltaTrue`, `newUUID`, `doJSON`, `setHeaders`, `Login`, `ProcessPromptStream` |
-| `internal/api` | `stream_display_test.go` | All pure functions: progress, COT formatting, HTML strip, source labels |
+| `internal/api` | `client_test.go` | `IsDeltaTrue`, `newUUID`, `doJSON`, `setHeaders`, `Login`, `ProcessPromptStream`, `GetIncidentReport`, `ListConnections`, `ListConnectionResources` |
+| `internal/api` | `stream_display_test.go` | All pure functions: progress, COT formatting, source labels |
 | `internal/config` | `config_test.go` | `Validate`, `ValidateProject`, `Load`/`Save` round-trip |
 | `internal/display` | `display_test.go` | Label functions, `FormatTime` |
+| `internal/service` | `*_test.go` (7 files) | Pure business logic: session filters, scores, reports, links, connections, projects, stream helpers |
+| `internal/tui` | `model_test.go` | Model state transitions, command dispatch, slash command routing (uses mock `HawkeyeAPI`) |
+| `internal/tui` | `stream_test.go` | `parseSourceLabel`, `parseCOTFields`, `findActiveCOTPart`, `isTrivialContent` |
 
 ## Architecture
 
@@ -51,11 +54,14 @@ make check      # Run lint then test — the single command to validate everythi
 
 ### Module Layout
 
-- **`main.go`** — Entry point, manual argument parsing, all 8 command handlers (`login`, `set`, `config`, `investigate`, `sessions`, `inspect`, `summary`, `prompts`). Contains interactive prompts and text formatting helpers.
+- **`main.go`** — Entry point, manual argument parsing, 16 command handlers (`login`, `set`, `config`, `investigate`, `sessions`, `inspect`, `summary`, `prompts`, `projects`, `feedback`, `score`, `link`, `report`, `connections`, `profiles`, `help`). Contains interactive prompts and text formatting helpers.
 - **`internal/api/client.go`** — HTTP client (`Client` struct), all API endpoint methods, SSE stream parser. Login uses multi-endpoint fallback (4 paths). Streaming uses `bufio.Scanner` with 1MB buffer and no timeout (investigations can run 30+ min).
+- **`internal/api/iface.go`** — `HawkeyeAPI` interface extracted from `Client` for testability. The TUI uses this interface to allow mock injection in tests.
 - **`internal/api/stream_display.go`** — `StreamDisplay` state machine for real-time terminal output. Handles event deduplication, background spinner (goroutine + mutex), chain-of-thought round tracking, delta-aware text accumulation, and source formatting. This is the most complex module (~950 lines).
-- **`internal/config/config.go`** — Reads/writes `~/.hawkeye/config.json` (0600 permissions). Stores server URL, JWT token, org UUID, project UUID.
+- **`internal/config/config.go`** — Reads/writes `~/.hawkeye/config.json` (0600 permissions). Stores server URL, JWT token, org UUID, project UUID. Supports named profiles via `--profile`.
 - **`internal/display/display.go`** — ANSI color constants and terminal formatting helpers (headers, status labels, spinners).
+- **`internal/service/`** — Pure business logic layer (no I/O). Contains formatters and transformers for sessions, scores, reports, links, connections, projects, and stream helpers. Both CLI and TUI share this layer.
+- **`internal/tui/`** — Bubble Tea interactive TUI. `model.go` (state machine + slash command registry), `commands.go` (async command handlers), `stream.go` (streaming display adapter).
 - **`internal/api/markdown.go`** — Stub markdown processor (currently passthrough).
 
 ### Key Data Flow
