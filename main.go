@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 var version = "0.1.0"
 
 var activeProfile string
+var jsonOutput bool
 
 func main() {
 	args := os.Args[1:]
@@ -25,6 +27,10 @@ func main() {
 
 	// No args → launch interactive mode (default)
 	if len(args) == 0 {
+		if jsonOutput {
+			display.Error("--json is not supported in interactive mode")
+			os.Exit(1)
+		}
 		if err := tui.Run(version, activeProfile); err != nil {
 			display.Error(err.Error())
 			os.Exit(1)
@@ -34,6 +40,10 @@ func main() {
 
 	// Explicit -i flag also launches interactive mode
 	if args[0] == "-i" || args[0] == "--interactive" || args[0] == "interactive" {
+		if jsonOutput {
+			display.Error("--json is not supported in interactive mode")
+			os.Exit(1)
+		}
 		if err := tui.Run(version, activeProfile); err != nil {
 			display.Error(err.Error())
 			os.Exit(1)
@@ -265,6 +275,17 @@ func cmdConfig() error {
 		return err
 	}
 
+	if jsonOutput {
+		return printJSON(map[string]string{
+			"profile":      config.ProfileName(activeProfile),
+			"server":       cfg.Server,
+			"username":     cfg.Username,
+			"project":      cfg.ProjectID,
+			"org":          cfg.OrgUUID,
+			"last_session": cfg.LastSession,
+		})
+	}
+
 	display.Header("Hawkeye CLI Configuration")
 
 	display.Info("Profile:", config.ProfileName(activeProfile))
@@ -466,6 +487,10 @@ func cmdSessions(args []string) error {
 		return fmt.Errorf("listing sessions: %w", err)
 	}
 
+	if jsonOutput {
+		return printJSON(resp.Sessions)
+	}
+
 	display.Header(fmt.Sprintf("Sessions (%d)", len(resp.Sessions)))
 
 	if len(resp.Sessions) == 0 {
@@ -532,6 +557,10 @@ func cmdInspect(args []string) error {
 	resp, err := client.SessionInspect(cfg.ProjectID, sessionUUID)
 	if err != nil {
 		return fmt.Errorf("inspecting session: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp)
 	}
 
 	if resp.SessionInfo != nil {
@@ -678,6 +707,10 @@ func cmdSummary(args []string) error {
 		return fmt.Errorf("getting summary: %w", err)
 	}
 
+	if jsonOutput {
+		return printJSON(resp)
+	}
+
 	if resp.SessionInfo != nil {
 		name := resp.SessionInfo.Name
 		if name == "" {
@@ -814,6 +847,10 @@ func cmdPrompts() error {
 		return fmt.Errorf("getting prompt library: %w", err)
 	}
 
+	if jsonOutput {
+		return printJSON(resp)
+	}
+
 	display.Header(fmt.Sprintf("Prompt Library (%d prompts)", len(resp.Items)))
 
 	if len(resp.Items) == 0 {
@@ -857,6 +894,10 @@ func cmdProjects() error {
 	}
 
 	projects := service.FilterSystemProjects(resp.Specs)
+
+	if jsonOutput {
+		return printJSON(projects)
+	}
 
 	display.Header(fmt.Sprintf("Projects (%d)", len(projects)))
 
@@ -906,6 +947,10 @@ func cmdScore(args []string) error {
 	resp, err := client.GetSessionSummary(cfg.ProjectID, sessionUUID)
 	if err != nil {
 		return fmt.Errorf("getting summary: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp)
 	}
 
 	scores := service.ExtractScores(resp)
@@ -979,6 +1024,11 @@ func cmdLink(args []string) error {
 	}
 
 	url := service.BuildSessionURL(cfg.Server, cfg.ProjectID, sessionUUID)
+
+	if jsonOutput {
+		return printJSON(map[string]string{"url": url})
+	}
+
 	fmt.Println(url)
 	return nil
 }
@@ -999,6 +1049,10 @@ func cmdReport() error {
 	resp, err := client.GetIncidentReport()
 	if err != nil {
 		return fmt.Errorf("getting incident report: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp)
 	}
 
 	report := service.FormatReport(resp)
@@ -1057,6 +1111,10 @@ func cmdConnections(args []string) error {
 		return fmt.Errorf("listing connections: %w", err)
 	}
 
+	if jsonOutput {
+		return printJSON(resp.Specs)
+	}
+
 	display.Header(fmt.Sprintf("Connections (%d)", len(resp.Specs)))
 
 	if len(resp.Specs) == 0 {
@@ -1093,6 +1151,10 @@ func cmdConnectionResources(cfg *config.Config, connUUID string) error {
 		return fmt.Errorf("listing resources: %w", err)
 	}
 
+	if jsonOutput {
+		return printJSON(resp.Specs)
+	}
+
 	resources := service.FormatResources(resp.Specs)
 
 	display.Header(fmt.Sprintf("Resources for %s (%d)", connUUID, len(resources)))
@@ -1120,6 +1182,13 @@ func cmdProfiles() error {
 		return err
 	}
 
+	if jsonOutput {
+		return printJSON(map[string]any{
+			"profiles": profiles,
+			"active":   config.ProfileName(activeProfile),
+		})
+	}
+
 	display.Header(fmt.Sprintf("Profiles (%d)", len(profiles)))
 
 	if len(profiles) == 0 {
@@ -1140,6 +1209,15 @@ func cmdProfiles() error {
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+func printJSON(v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("JSON marshal: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
+}
 
 func wrapText(text string, width int) []string {
 	var lines []string
@@ -1170,14 +1248,17 @@ func wrapText(text string, width int) []string {
 func parseGlobalFlags(args []string) []string {
 	var remaining []string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--profile" {
+		switch args[i] {
+		case "--profile":
 			if i+1 < len(args) {
 				i++
 				activeProfile = args[i]
 			}
-			continue
+		case "-j", "--json":
+			jsonOutput = true
+		default:
+			remaining = append(remaining, args[i])
 		}
-		remaining = append(remaining, args[i])
 	}
 	return remaining
 }
@@ -1196,7 +1277,11 @@ func printUsage() {
 
 %sUsage:%s
   hawkeye                                            Launch interactive mode (default)
-  hawkeye [--profile <name>] <command> [arguments]   Run a specific command
+  hawkeye [--profile <name>] [-j] <command> [args]   Run a specific command
+
+%sGlobal Options:%s
+  --profile <name>            Use a named config profile (default: unnamed)
+  -j, --json                  Output results as JSON (for scripting/piping)
 
 %sGetting Started:%s
   login <url> -u <user> -p <pass>  Authenticate (URL = frontend address)
@@ -1241,7 +1326,6 @@ func printUsage() {
 
 %sProfiles:%s
   profiles                    List all config profiles
-  --profile <name>            Use a named config profile (default: unnamed)
 
 %sExamples:%s
   hawkeye                                            # Start interactive mode
@@ -1260,6 +1344,7 @@ func printUsage() {
   hawkeye --profile staging login https://myenv.app.neubird.ai/ -u user -p pass
 
 `, display.Bold, display.Reset, version,
+		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
