@@ -25,6 +25,12 @@ Running from Go without install:
 alias hawkeye='go run github.com/neubirdai/hawkeye-cli@latest'
 ```
 
+Snap
+
+```bash
+snap install hawkeye-cli
+```
+
 ### Usage
 
 ```bash
