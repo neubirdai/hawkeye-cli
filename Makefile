@@ -1,7 +1,7 @@
 BINARY=hawkeye
 VERSION=0.1.0
 
-.PHONY: build clean install test lint check
+.PHONY: build clean install test lint check snap snap-upload
 
 build:
 	go build -ldflags="-s -w" -o $(BINARY) .
@@ -27,3 +27,9 @@ release:
 	GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/$(BINARY)-darwin-amd64 .
 	GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/$(BINARY)-darwin-arm64 .
 	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/$(BINARY)-windows-amd64.exe .
+
+snap:
+	snapcraft pack
+
+snap-upload:
+	snapcraft upload $(BINARY)-cli_$(VERSION)_*.snap --release=edge
