@@ -36,9 +36,15 @@ type slashCmd struct {
 var slashCommands = []slashCmd{
 	{"/clear", "Clear the screen"},
 	{"/config", "Show current configuration"},
-	{"/connections", "List data source connections"},
+	{"/connections", "Manage data source connections"},
+	{"/connections list", "List data source connections"},
+	{"/connections resources", "List resources for a connection"},
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
+	{"/incidents", "Add incident tool connections"},
+	{"/incidents add pagerduty", "Add a PagerDuty connection (--name, --api-key)"},
+	{"/incidents add firehydrant", "Add a FireHydrant connection (--name, --api-key)"},
+	{"/incidents add incidentio", "Add an incident.io connection (--name, --api-key)"},
 	{"/inspect", "View session details"},
 	{"/link", "Get web UI URL for session"},
 	{"/login", "Login to a Hawkeye server"},
@@ -422,6 +428,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resourcesResultMsg:
 		return m.handleResourcesResult(msg)
+
+	case addConnectionResultMsg:
+		return m.handleAddConnectionResult(msg)
 	}
 
 	// Update sub-components
@@ -554,17 +563,37 @@ func (m model) renderCommandMenu(matches []slashCmd) string {
 }
 
 // matchCommands returns all slash commands matching a prefix.
+// Top-level commands (no spaces) are shown while the user is still typing the
+// base command. Subcommands (contain a space) only appear once the user has
+// typed a space after the base command.
 func matchCommands(prefix string) []slashCmd {
 	prefix = strings.ToLower(prefix)
-	// Just "/" with nothing else — show all
+	// Just "/" — show only top-level commands
 	if prefix == "/" {
-		return slashCommands
+		var top []slashCmd
+		for _, c := range slashCommands {
+			if !strings.Contains(c.name[1:], " ") {
+				top = append(top, c)
+			}
+		}
+		return top
 	}
+	prefixHasSpace := strings.Contains(prefix[1:], " ")
 	var matches []slashCmd
 	for _, c := range slashCommands {
-		if strings.HasPrefix(c.name, prefix) {
-			matches = append(matches, c)
+		if !strings.HasPrefix(c.name, prefix) {
+			continue
 		}
+		nameHasSpace := strings.Contains(c.name[1:], " ")
+		// Only surface subcommands when the user has already typed a space
+		if nameHasSpace && !prefixHasSpace {
+			continue
+		}
+		// Only surface top-level commands when the user hasn't typed a space
+		if !nameHasSpace && prefixHasSpace {
+			continue
+		}
+		matches = append(matches, c)
 	}
 	return matches
 }

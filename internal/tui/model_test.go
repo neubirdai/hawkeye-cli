@@ -135,6 +135,13 @@ func (m *mockAPI) ListConnectionResources(connUUID string, limit int) (*api.List
 	return &api.ListResourcesResponse{}, nil
 }
 
+func (m *mockAPI) AddConnection(req *api.AddConnectionRequest) (*api.AddConnectionResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &api.AddConnectionResponse{}, nil
+}
+
 // Verify mockAPI satisfies the interface at compile time.
 var _ api.HawkeyeAPI = (*mockAPI)(nil)
 

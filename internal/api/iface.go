@@ -16,4 +16,5 @@ type HawkeyeAPI interface {
 	GetIncidentReport() (*IncidentReportResponse, error)
 	ListConnections(projectUUID string) (*ListConnectionsResponse, error)
 	ListConnectionResources(connUUID string, limit int) (*ListResourcesResponse, error)
+	AddConnection(req *AddConnectionRequest) (*AddConnectionResponse, error)
 }
