@@ -2,10 +2,10 @@ package tui
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 
 	"hawkeye-cli/internal/api"
+	"hawkeye-cli/internal/service"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -37,7 +37,7 @@ type streamErrMsg struct {
 // channel, and returns a tea.Cmd that keeps reading from that channel
 // until the stream ends.
 
-func startInvestigation(client *api.Client, projectID, sessionID, prompt string) tea.Cmd {
+func startInvestigation(client api.HawkeyeAPI, projectID, sessionID, prompt string) tea.Cmd {
 	return func() tea.Msg {
 		// Create session if none provided
 		if sessionID == "" {
@@ -59,7 +59,7 @@ func startInvestigation(client *api.Client, projectID, sessionID, prompt string)
 
 var activeStreamCh chan tea.Msg
 
-func beginStream(client *api.Client, projectID, sessionID, prompt string) tea.Cmd {
+func beginStream(client api.HawkeyeAPI, projectID, sessionID, prompt string) tea.Cmd {
 	ch := make(chan tea.Msg, 64)
 	activeStreamCh = ch
 
@@ -109,13 +109,13 @@ func beginStream(client *api.Client, projectID, sessionID, prompt string) tea.Cm
 				if isDelta {
 					// Delta mode: parts[0] is the new fragment
 					if len(parts) > 0 {
-						text := stripHTML(parts[0])
+						text := service.StripHTML(parts[0])
 						ch <- streamChunkMsg{contentType: ct, eventType: "chat_delta", text: text, raw: resp}
 					}
 				} else {
 					// Full text mode: join all parts
 					text := strings.Join(parts, "\n")
-					text = stripHTML(text)
+					text = service.StripHTML(text)
 					ch <- streamChunkMsg{contentType: ct, eventType: "chat_full", text: text, raw: resp}
 				}
 
@@ -168,16 +168,6 @@ func waitForStream(ch <-chan tea.Msg) tea.Cmd {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
-
-func stripHTML(s string) string {
-	s = strings.ReplaceAll(s, "<br/>", "\n")
-	s = strings.ReplaceAll(s, "<br>", "\n")
-	s = strings.ReplaceAll(s, "<br />", "\n")
-	s = htmlTagRe.ReplaceAllString(s, "")
-	return s
-}
 
 // parseSourceLabel extracts a display label from a source JSON string.
 func parseSourceLabel(raw string) string {

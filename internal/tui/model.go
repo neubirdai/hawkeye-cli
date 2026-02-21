@@ -6,6 +6,7 @@ import (
 
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
+	"hawkeye-cli/internal/service"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -35,13 +36,17 @@ type slashCmd struct {
 var slashCommands = []slashCmd{
 	{"/clear", "Clear the screen"},
 	{"/config", "Show current configuration"},
+	{"/connections", "List data source connections"},
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
 	{"/inspect", "View session details"},
+	{"/link", "Get web UI URL for session"},
 	{"/login", "Login to a Hawkeye server"},
 	{"/projects", "List available projects"},
 	{"/prompts", "Browse investigation prompts"},
 	{"/quit", "Exit Hawkeye"},
+	{"/report", "Show incident analytics"},
+	{"/score", "Show RCA quality scores"},
 	{"/session", "Set active session"},
 	{"/sessions", "List recent sessions"},
 	{"/set", "Set project or config"},
@@ -61,7 +66,7 @@ type model struct {
 	// App state
 	mode      appMode
 	cfg       *config.Config
-	client    *api.Client
+	client    api.HawkeyeAPI
 	sessionID string
 	version   string
 
@@ -122,7 +127,7 @@ func initialModel(version, profile string) model {
 
 	cfg, _ := config.Load(profile)
 
-	var client *api.Client
+	var client api.HawkeyeAPI
 	if cfg != nil && cfg.Server != "" && cfg.Token != "" {
 		client = api.NewClient(cfg)
 	}
@@ -405,6 +410,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case feedbackResultMsg:
 		return m.handleFeedbackResult(msg)
+
+	case scoreResultMsg:
+		return m.handleScoreResult(msg)
+
+	case reportResultMsg:
+		return m.handleReportResult(msg)
+
+	case connectionsResultMsg:
+		return m.handleConnectionsResult(msg)
+
+	case resourcesResultMsg:
+		return m.handleResourcesResult(msg)
 	}
 
 	// Update sub-components
@@ -578,11 +595,11 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 
 	// ── Progress: always update spinner, queue during active streaming ───
 	case "CONTENT_TYPE_PROGRESS_STATUS":
-		display := extractProgressDisplay(msg.text)
+		display := service.ExtractProgressDisplay(msg.text)
 		// Always update the spinner line — mirrors the web UI's status bar.
 		m.lastStatus = display
 
-		normKey := normalizeProgress(display)
+		normKey := service.NormalizeProgress(display)
 		if m.seenProgress[normKey] {
 			return nil // already shown or queued
 		}
@@ -787,7 +804,7 @@ func (m *model) handleCOTChunk(msg streamChunkMsg) tea.Cmd {
 		showHeader()
 
 		// Filter only exact placeholder text in legacy mode (full text, not fragments)
-		if investigation != "" && !isTrivialContent(investigation) {
+		if investigation != "" && !service.IsTrivialContent(investigation) {
 			prev := m.cotAccum[cotID]
 			if len(investigation) > len(prev) {
 				m.cotTextActive = true
@@ -843,38 +860,6 @@ func (m *model) flushPendingProgress() []tea.Cmd {
 	return cmds
 }
 
-// isTrivialContent checks if the text is just a placeholder/status message
-// that shouldn't be displayed as investigation content.
-// Only filters exact placeholder strings the server sends before real content.
-// IMPORTANT: Do NOT filter by length — delta fragments are short but real.
-func isTrivialContent(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return true
-	}
-	lower := strings.ToLower(trimmed)
-	return lower == "in progress..." ||
-		lower == "investigating..." ||
-		lower == "analyzing..." ||
-		lower == "thinking..."
-}
-
-// normalizeProgress deduplicates progress messages that differ only in counts.
-// Operates on the display text (after extractProgressDisplay), e.g.:
-// "Found 2 results" and "Found 3 results" → same key.
-func normalizeProgress(display string) string {
-	if strings.HasPrefix(display, "Found ") && strings.HasSuffix(display, " results") {
-		return "Found N results"
-	}
-	if strings.Contains(display, "result streams") {
-		return "Analyzing N result streams"
-	}
-	if strings.Contains(display, "datas") && strings.Contains(display, "ources") {
-		return "Selected N data sources"
-	}
-	return display
-}
-
 // COT line buffer per ID (stored in cotAccum with a special prefix)
 func (m *model) getCOTBuffer(cotID string) string {
 	key := "_buf_" + cotID
@@ -912,15 +897,4 @@ func truncateUUID(s string) string {
 		return s[:8] + "..." + s[len(s)-4:]
 	}
 	return s
-}
-
-// extractProgressDisplay pulls out just the parenthetical description
-// from progress text like "PromptGate (Preparing Telemetry Sources)".
-func extractProgressDisplay(text string) string {
-	if i := strings.Index(text, "("); i >= 0 {
-		if j := strings.LastIndex(text, ")"); j > i {
-			return text[i+1 : j]
-		}
-	}
-	return text
 }

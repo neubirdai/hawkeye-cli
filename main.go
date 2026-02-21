@@ -9,6 +9,7 @@ import (
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
 	"hawkeye-cli/internal/display"
+	"hawkeye-cli/internal/service"
 	"hawkeye-cli/internal/tui"
 )
 
@@ -63,6 +64,14 @@ func main() {
 		err = cmdPrompts()
 	case "projects":
 		err = cmdProjects()
+	case "score":
+		err = cmdScore(args[1:])
+	case "link":
+		err = cmdLink(args[1:])
+	case "report":
+		err = cmdReport()
+	case "connections":
+		err = cmdConnections(args[1:])
 	case "profiles":
 		err = cmdProfiles()
 	case "help", "--help", "-h":
@@ -402,6 +411,8 @@ func cmdInvestigate(args []string) error {
 
 func cmdSessions(args []string) error {
 	limit := 20
+	var status, from, to, search string
+	var uninvestigated bool
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -414,6 +425,28 @@ func cmdSessions(args []string) error {
 				}
 				limit = n
 			}
+		case "--status":
+			if i+1 < len(args) {
+				i++
+				status = args[i]
+			}
+		case "--from":
+			if i+1 < len(args) {
+				i++
+				from = args[i]
+			}
+		case "--to":
+			if i+1 < len(args) {
+				i++
+				to = args[i]
+			}
+		case "--search":
+			if i+1 < len(args) {
+				i++
+				search = args[i]
+			}
+		case "--uninvestigated":
+			uninvestigated = true
 		}
 	}
 
@@ -427,7 +460,8 @@ func cmdSessions(args []string) error {
 
 	client := api.NewClient(cfg)
 
-	resp, err := client.SessionList(cfg.ProjectID, limit, nil)
+	filters := service.BuildSessionFilters(status, from, to, search, uninvestigated)
+	resp, err := client.SessionList(cfg.ProjectID, limit, filters)
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}
@@ -822,12 +856,7 @@ func cmdProjects() error {
 		return fmt.Errorf("listing projects: %w", err)
 	}
 
-	var projects []api.ProjectSpec
-	for _, p := range resp.Specs {
-		if !strings.Contains(p.Name, "SystemGlobalProject") {
-			projects = append(projects, p)
-		}
-	}
+	projects := service.FilterSystemProjects(resp.Specs)
 
 	display.Header(fmt.Sprintf("Projects (%d)", len(projects)))
 
@@ -848,6 +877,238 @@ func cmdProjects() error {
 	fmt.Printf("  %sTip:%s Run %shawkeye set project <uuid>%s to select a project.\n\n",
 		display.Dim, display.Reset, display.Cyan, display.Reset)
 
+	return nil
+}
+
+// ─── score ──────────────────────────────────────────────────────────────────
+
+func cmdScore(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if cfg.LastSession != "" {
+		sessionUUID = cfg.LastSession
+	} else {
+		fmt.Println("Usage: hawkeye score [session-uuid]")
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+
+	resp, err := client.GetSessionSummary(cfg.ProjectID, sessionUUID)
+	if err != nil {
+		return fmt.Errorf("getting summary: %w", err)
+	}
+
+	scores := service.ExtractScores(resp)
+	if !scores.HasScores {
+		display.Warn("No RCA scores available for this session.")
+		return nil
+	}
+
+	display.Header("RCA Quality Scores")
+
+	if scores.ScoredBy != "" {
+		display.Info("Scored by:", scores.ScoredBy)
+	}
+
+	fmt.Println()
+	fmt.Printf("  %s📊 Accuracy:%s     %.1f/100\n", display.Cyan, display.Reset, scores.Accuracy.Score)
+	if scores.Accuracy.Summary != "" {
+		fmt.Printf("     %s%s%s\n", display.Gray, scores.Accuracy.Summary, display.Reset)
+	}
+
+	fmt.Printf("  %s📊 Completeness:%s %.1f/100\n", display.Cyan, display.Reset, scores.Completeness.Score)
+	if scores.Completeness.Summary != "" {
+		fmt.Printf("     %s%s%s\n", display.Gray, scores.Completeness.Summary, display.Reset)
+	}
+
+	if len(scores.Qualitative.Strengths) > 0 {
+		fmt.Printf("\n  %s✅ Strengths:%s\n", display.Green, display.Reset)
+		for _, s := range scores.Qualitative.Strengths {
+			fmt.Printf("    • %s\n", s)
+		}
+	}
+
+	if len(scores.Qualitative.Improvements) > 0 {
+		fmt.Printf("\n  %s💡 Improvements:%s\n", display.Yellow, display.Reset)
+		for _, s := range scores.Qualitative.Improvements {
+			fmt.Printf("    • %s\n", s)
+		}
+	}
+
+	if scores.TimeSaved != nil {
+		fmt.Printf("\n  %s⏱  Time Saved:%s\n", display.Blue, display.Reset)
+		fmt.Printf("    Standard investigation: %.0f min\n", scores.TimeSaved.StandardInvestigationMin)
+		fmt.Printf("    Hawkeye investigation:  %.0f min\n", scores.TimeSaved.HawkeyeInvestigationMin)
+		fmt.Printf("    %sTime saved:%s            %.0f min\n",
+			display.Bold, display.Reset, scores.TimeSaved.TimeSavedMinutes)
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// ─── link ───────────────────────────────────────────────────────────────────
+
+func cmdLink(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if cfg.LastSession != "" {
+		sessionUUID = cfg.LastSession
+	} else {
+		fmt.Println("Usage: hawkeye link [session-uuid]")
+		return nil
+	}
+
+	url := service.BuildSessionURL(cfg.Server, cfg.ProjectID, sessionUUID)
+	fmt.Println(url)
+	return nil
+}
+
+// ─── report ─────────────────────────────────────────────────────────────────
+
+func cmdReport() error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	client := api.NewClient(cfg)
+
+	resp, err := client.GetIncidentReport()
+	if err != nil {
+		return fmt.Errorf("getting incident report: %w", err)
+	}
+
+	report := service.FormatReport(resp)
+
+	display.Header("Incident Analytics Report")
+
+	if report.Period != "" {
+		display.Info("Period:", report.Period)
+	}
+
+	fmt.Println()
+	fmt.Printf("  %s📈 Overview%s\n", display.Cyan, display.Reset)
+	fmt.Printf("    Total incidents:      %d\n", report.TotalIncidents)
+	fmt.Printf("    Total investigations: %d\n", report.TotalInvestigations)
+	fmt.Printf("    Avg time saved:       %s\n", report.AvgTimeSavedMinutes)
+	fmt.Printf("    Avg MTTR:             %s\n", report.AvgMTTR)
+	fmt.Printf("    Noise reduction:      %s\n", report.NoiseReduction)
+	fmt.Printf("    Total time saved:     %s\n", report.TotalTimeSavedHours)
+
+	if len(report.IncidentTypes) > 0 {
+		fmt.Printf("\n  %s📋 By Incident Type%s\n", display.Cyan, display.Reset)
+		for _, it := range report.IncidentTypes {
+			fmt.Printf("    %s%-20s%s  count: %-5d  saved: %-10s  noise: %s\n",
+				display.Bold, it.Type, display.Reset, it.Count, it.AvgTimeSaved, it.NoiseReduction)
+		}
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// ─── connections ────────────────────────────────────────────────────────────
+
+func cmdConnections(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	// Subcommand: "resources <conn-uuid>"
+	if len(args) > 0 && args[0] == "resources" {
+		if len(args) < 2 {
+			fmt.Println("Usage: hawkeye connections resources <connection-uuid>")
+			return nil
+		}
+		return cmdConnectionResources(cfg, args[1])
+	}
+
+	client := api.NewClient(cfg)
+
+	resp, err := client.ListConnections(cfg.ProjectID)
+	if err != nil {
+		return fmt.Errorf("listing connections: %w", err)
+	}
+
+	display.Header(fmt.Sprintf("Connections (%d)", len(resp.Specs)))
+
+	if len(resp.Specs) == 0 {
+		display.Warn("No connections found.")
+		return nil
+	}
+
+	for _, spec := range resp.Specs {
+		c := service.FormatConnection(spec)
+		syncIcon := "🔄"
+		if c.SyncState == "SYNCED" || c.SyncState == "SYNC_STATE_SYNCED" {
+			syncIcon = "✅"
+		}
+		fmt.Printf("\n  %s %s%s%s  %s(%s)%s\n", syncIcon, display.Bold, c.Name, display.Reset,
+			display.Dim, c.Type, display.Reset)
+		fmt.Printf("    %sUUID:%s  %s\n", display.Dim, display.Reset, c.UUID)
+		fmt.Printf("    %sSync:%s  %s   %sTraining:%s %s\n",
+			display.Dim, display.Reset, c.SyncState,
+			display.Dim, display.Reset, c.TrainingState)
+	}
+
+	fmt.Println()
+	fmt.Printf("  %sTip:%s Run %shawkeye connections resources <uuid>%s to list resources.\n\n",
+		display.Dim, display.Reset, display.Cyan, display.Reset)
+
+	return nil
+}
+
+func cmdConnectionResources(cfg *config.Config, connUUID string) error {
+	client := api.NewClient(cfg)
+
+	resp, err := client.ListConnectionResources(connUUID, 100)
+	if err != nil {
+		return fmt.Errorf("listing resources: %w", err)
+	}
+
+	resources := service.FormatResources(resp.Specs)
+
+	display.Header(fmt.Sprintf("Resources for %s (%d)", connUUID, len(resources)))
+
+	if len(resources) == 0 {
+		display.Warn("No resources found.")
+		return nil
+	}
+
+	for _, r := range resources {
+		fmt.Printf("  • %s%-30s%s  %s%s%s\n",
+			display.Bold, r.Name, display.Reset,
+			display.Dim, r.TelemetryType, display.Reset)
+	}
+
+	fmt.Println()
 	return nil
 }
 
@@ -952,14 +1213,28 @@ func printUsage() {
 %sInvestigation:%s
   investigate|ask "<question>"  Run an AI-powered investigation (streams output)
     -s, --session <uuid>    Continue in an existing session
+  link [session-uuid]       Get web UI URL for a session
 
 %sSessions:%s
   sessions                  List recent investigation sessions
     -n, --limit <count>     Number of sessions to list (default: 20)
+    --status <status>       Filter by status (not_started, in_progress, investigated)
+    --from <date>           Filter sessions created after date
+    --to <date>             Filter sessions created before date
+    --search <text>         Search sessions by title
+    --uninvestigated        Shorthand for --status not_started
   inspect [session-uuid]    View session details (defaults to last session)
   summary [session-uuid]    Get executive summary (defaults to last session)
   feedback|td [session-uuid]  Thumbs down feedback (defaults to last session)
     -r, --reason <text>     Reason for negative feedback
+
+%sAnalysis:%s
+  score [session-uuid]      Show RCA quality scores
+  report                    Show org-wide incident analytics
+
+%sConnections:%s
+  connections [list]                  List data source connections
+  connections resources <conn-uuid>   List resources for a connection
 
 %sLibrary:%s
   prompts                   Browse available investigation prompts
@@ -974,11 +1249,19 @@ func printUsage() {
   hawkeye set project 66520f61-6a43-48ac-8286-a7e7cf9755c5
   hawkeye investigate "Why is the API returning 500 errors?"
   hawkeye investigate "Check DB connections" -s <session-uuid>
-  hawkeye sessions
+  hawkeye sessions --uninvestigated
+  hawkeye sessions --status investigated --from 2025-01-01
+  hawkeye score <session-uuid>
+  hawkeye link <session-uuid>
+  hawkeye report
+  hawkeye connections
+  hawkeye connections resources <conn-uuid>
   hawkeye inspect <session-uuid>
   hawkeye --profile staging login https://myenv.app.neubird.ai/ -u user -p pass
 
 `, display.Bold, display.Reset, version,
+		display.Cyan, display.Reset,
+		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
 		display.Cyan, display.Reset,
