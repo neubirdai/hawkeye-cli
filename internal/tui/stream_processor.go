@@ -143,7 +143,12 @@ func (sp *StreamProcessor) handleProgress(msg streamChunkMsg) []OutputEvent {
 	// Flush the COT buffer immediately BEFORE checking for duplicates.
 	// This ensures the last COT line is printed even if progress is a duplicate.
 	if sp.cotTextActive && sp.activeCotID != "" && !sp.cotDeltaMode {
-		out = append(out, sp.flushCOTBuffer(sp.activeCotID)...)
+		flushed := sp.flushCOTBuffer(sp.activeCotID)
+		if len(flushed) > 0 {
+			out = append(out, flushed...)
+			// Add blank line after COT to separate from progress
+			out = append(out, OutputEvent{Type: OutputBlank})
+		}
 		sp.cotTextActive = false
 		sp.cotStepActive = false
 	}

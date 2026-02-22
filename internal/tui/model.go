@@ -315,7 +315,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionCreatedMsg:
 		m.sessionID = msg.sessionID
 		cmds = append(cmds,
-			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Session: %s", truncateUUID(m.sessionID)))),
+			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Session: %s", m.sessionID))),
 		)
 		if consoleURL := m.cfg.ConsoleSessionURL(m.sessionID); consoleURL != "" {
 			cmds = append(cmds, tea.Println(dimStyle.Render(fmt.Sprintf("    🔗 %s", consoleURL))))
@@ -592,7 +592,15 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	}
 	var cmds []tea.Cmd
 	for _, ev := range events {
-		cmds = append(cmds, tea.Println(renderOutputEvent(ev)))
+		// Skip progress events - they're shown in the spinner only
+		if ev.Type == OutputProgress {
+			continue
+		}
+		rendered := renderOutputEvent(ev)
+		cmds = append(cmds, tea.Println(rendered))
+	}
+	if len(cmds) == 0 {
+		return nil
 	}
 	return tea.Sequence(cmds...)
 }
@@ -602,7 +610,9 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 func renderOutputEvent(ev OutputEvent) string {
 	switch ev.Type {
 	case OutputProgress:
-		return statusStyle.Render("  ⟳ " + ev.Text)
+		// Progress is shown in the spinner (View), not printed to scrollback.
+		// This keeps the output clean - only meaningful content is permanent.
+		return ""
 	case OutputCOTHeader:
 		return cotHeaderStyle.Render(fmt.Sprintf("  🔍 %s", ev.Text))
 	case OutputCOTExplanation:

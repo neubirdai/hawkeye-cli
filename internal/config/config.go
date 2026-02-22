@@ -33,14 +33,17 @@ func (c *Config) ConsoleSessionURL(sessionID string) string {
 	}
 	base := c.FrontendURL
 	if base == "" {
-		// Derive from backend URL: https://env.app.neubird.ai/api → https://env.app.neubird.ai
-		base = strings.TrimRight(c.Server, "/")
-		base = strings.TrimSuffix(base, "/api")
-		if base == "" {
-			return ""
-		}
+		base = c.Server
 	}
-	return strings.TrimRight(base, "/") + "/console/project/" + c.ProjectID + "/session/" + sessionID
+	if base == "" {
+		return ""
+	}
+	// Strip /api suffix if present (handles both backend URLs and misconfigured frontend URLs)
+	base = strings.TrimRight(base, "/")
+	if idx := strings.Index(base, "/api"); idx > 0 {
+		base = base[:idx]
+	}
+	return base + "/console/project/" + c.ProjectID + "/session/" + sessionID
 }
 
 func configPath(profile string) (string, error) {
