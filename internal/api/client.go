@@ -1027,6 +1027,58 @@ func (c *Client) ListProjectConnections(projectUUID string) (*ListProjectConnect
 	return &resp, nil
 }
 
+// --- Typed Connection Add (PagerDuty, FireHydrant, incident.io) ---
+
+// PagerdutyConnectionInfo holds the auth credentials for a PagerDuty connection.
+type PagerdutyConnectionInfo struct {
+	ApiAccessKey string `json:"api_access_key,omitempty"`
+}
+
+// FirehydrantConnectionInfo holds the auth credentials for a FireHydrant connection.
+type FirehydrantConnectionInfo struct {
+	ApiKey string `json:"api_key,omitempty"`
+}
+
+// IncidentioConnectionInfo holds the auth credentials for an incident.io connection.
+type IncidentioConnectionInfo struct {
+	ApiKey string `json:"api_key,omitempty"`
+}
+
+// AddConnectionInput is the payload body for creating a connection.
+type AddConnectionInput struct {
+	Name                      string                     `json:"name,omitempty"`
+	ConnectionType            string                     `json:"connection_type,omitempty"`
+	PagerdutyConnectionInfo   *PagerdutyConnectionInfo   `json:"pagerduty_connection_info,omitempty"`
+	FirehydrantConnectionInfo *FirehydrantConnectionInfo `json:"firehydrant_connection_info,omitempty"`
+	IncidentioConnectionInfo  *IncidentioConnectionInfo  `json:"incidentio_connection_info,omitempty"`
+}
+
+// AddConnectionRequest wraps the connection input for POST /v1/connection.
+type AddConnectionRequest struct {
+	Connection AddConnectionInput `json:"connection"`
+}
+
+// ConnectionOperationResponse is the generic response envelope for connection mutations.
+type ConnectionOperationResponse struct {
+	RequestID    string `json:"request_id"`
+	ErrorCode    int    `json:"error_code"`
+	ErrorMessage string `json:"error_message"`
+	UUID         string `json:"uuid"`
+}
+
+// AddConnectionResponse is returned by POST /v1/connection.
+type AddConnectionResponse struct {
+	Response ConnectionOperationResponse `json:"response"`
+}
+
+func (c *Client) AddConnection(req *AddConnectionRequest) (*AddConnectionResponse, error) {
+	var resp AddConnectionResponse
+	if err := c.doJSON("POST", "/v1/connection", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // --- Resources ---
 
 // ResourceID identifies a resource.

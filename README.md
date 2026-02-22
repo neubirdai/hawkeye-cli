@@ -25,6 +25,18 @@ Running from Go without install:
 alias hawkeye='go run github.com/neubirdai/hawkeye-cli@latest'
 ```
 
+Docker
+
+```bash
+docker run --rm -it neubirdai/hawkeye-cli
+```
+
+Docker with settings in a volume
+
+```
+docker run --rm -it -v ...:/root/.hawkeye neubirdai/hawkeye-cli
+```
+
 ### Usage
 
 ```bash

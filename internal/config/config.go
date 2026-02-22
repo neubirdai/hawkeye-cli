@@ -13,12 +13,37 @@ const configFile = "config.json"
 
 type Config struct {
 	Server      string `json:"server"`
+	FrontendURL string `json:"frontend_url,omitempty"`
 	Username    string `json:"username,omitempty"`
 	Token       string `json:"token,omitempty"`
 	OrgUUID     string `json:"org_uuid,omitempty"`
 	ProjectID   string `json:"project_uuid,omitempty"`
 	LastSession string `json:"last_session,omitempty"`
 	Profile     string `json:"-"`
+}
+
+// ConsoleSessionURL returns the web console URL for a given session,
+// e.g. https://myenv.app.neubird.ai/console/project/<pid>/session/<sid>.
+// Returns "" if the project ID or session ID is not configured.
+// Falls back to deriving the frontend URL from the backend Server URL
+// by stripping the "/api" suffix (common pattern for Neubird deployments).
+func (c *Config) ConsoleSessionURL(sessionID string) string {
+	if c.ProjectID == "" || sessionID == "" {
+		return ""
+	}
+	base := c.FrontendURL
+	if base == "" {
+		base = c.Server
+	}
+	if base == "" {
+		return ""
+	}
+	// Strip /api suffix if present (handles both backend URLs and misconfigured frontend URLs)
+	base = strings.TrimRight(base, "/")
+	if idx := strings.Index(base, "/api"); idx > 0 {
+		base = base[:idx]
+	}
+	return base + "/console/project/" + c.ProjectID + "/session/" + sessionID
 }
 
 func configPath(profile string) (string, error) {

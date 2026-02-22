@@ -26,6 +26,7 @@ type HawkeyeAPI interface {
 	AddConnectionToProject(projectUUID, connUUID string) error
 	RemoveConnectionFromProject(projectUUID, connUUID string) error
 	ListProjectConnections(projectUUID string) (*ListProjectConnectionsResponse, error)
+	AddConnection(req *AddConnectionRequest) (*AddConnectionResponse, error)
 	ListInstructions(projectUUID string) (*ListInstructionsResponse, error)
 	CreateInstruction(projectUUID, name, instrType, content string) (*CreateInstructionResponse, error)
 	UpdateInstructionStatus(instrUUID string, enabled bool) error

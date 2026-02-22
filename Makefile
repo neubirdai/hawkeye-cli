@@ -1,7 +1,9 @@
 BINARY=hawkeye
 VERSION=0.1.0
 
-.PHONY: build clean install test lint check
+DOCKER_REPO=neubirdai/hawkeye-cli
+
+.PHONY: build clean install test lint check docker docker-push
 
 build:
 	go build -ldflags="-s -w" -o $(BINARY) .
@@ -27,3 +29,9 @@ release:
 	GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/$(BINARY)-darwin-amd64 .
 	GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/$(BINARY)-darwin-arm64 .
 	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/$(BINARY)-windows-amd64.exe .
+
+docker:
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest --load .
+
+docker-push:
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest --push .

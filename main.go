@@ -197,6 +197,7 @@ func cmdLogin(args []string) error {
 	}
 
 	cfg.Server = serverURL
+	cfg.FrontendURL = strings.TrimRight(frontendURL, "/")
 	cfg.Username = username
 	cfg.Token = loginResp.AccessToken
 
@@ -416,6 +417,9 @@ func cmdInvestigate(args []string) error {
 	fmt.Println()
 	fmt.Printf("    %sPrompt:%s   %s\n", display.Dim, display.Reset, prompt)
 	fmt.Printf("    %sSession:%s  %s\n", display.Dim, display.Reset, sessionUUID)
+	if consoleURL := cfg.ConsoleSessionURL(sessionUUID); consoleURL != "" {
+		fmt.Printf("    %sConsole:%s  %s\n", display.Dim, display.Reset, consoleURL)
+	}
 	fmt.Println()
 	fmt.Printf(" %s──────────────────────────────────────────────────────────────────────────%s\n", display.Dim, display.Reset)
 

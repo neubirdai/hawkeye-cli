@@ -6,7 +6,6 @@ import (
 
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
-	"hawkeye-cli/internal/service"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -36,10 +35,16 @@ type slashCmd struct {
 var slashCommands = []slashCmd{
 	{"/clear", "Clear the screen"},
 	{"/config", "Show current configuration"},
-	{"/connections", "List/manage data source connections"},
+	{"/connections", "Manage data source connections"},
+	{"/connections list", "List data source connections"},
+	{"/connections resources", "List resources for a connection"},
 	{"/discover", "Discover project resources"},
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
+	{"/incidents", "Add incident tool connections"},
+	{"/incidents add pagerduty", "Add a PagerDuty connection (--name, --api-key)"},
+	{"/incidents add firehydrant", "Add a FireHydrant connection (--name, --api-key)"},
+	{"/incidents add incidentio", "Add an incident.io connection (--name, --api-key)"},
 	{"/inspect", "View session details"},
 	{"/instructions", "Manage project instructions"},
 	{"/investigate-alert", "Investigate an alert"},
@@ -76,30 +81,9 @@ type model struct {
 	sessionID string
 	version   string
 
-	// Streaming state
-	chatPrinted  int               // how many chars of chat response we've already printed
-	chatBuffer   string            // partial line buffer for chat response
-	cotAccum     map[string]string // accumulated COT investigation text per ID
-	cotPrinted   map[string]int    // how many chars printed per COT ID
-	cotDescShown map[string]bool   // whether we've printed the COT header
-	seenSources  map[string]bool
-	seenProgress map[string]bool
+	// Stream processor (manages all buffering, gating, block transitions)
+	processor    *StreamProcessor
 	streamPrompt string // the prompt being streamed
-
-	// Stream interleave protection — two-level gating:
-	//
-	// cotStepActive: true from cot_start (or first legacy COT event) to cot_end.
-	//   Suppresses sources from leaking between the COT header and its content.
-	//
-	// cotTextActive: true ONLY after we've printed at least one line of
-	//   investigation text. Suppresses progress from breaking mid-paragraph.
-	cotStepActive   bool     // true while inside a COT step (header → end)
-	cotTextActive   bool     // true once investigation text has been printed for current COT
-	chatStreaming   bool     // true while chat response text is actively streaming
-	activeCotID     string   // ID of the COT step we're currently displaying
-	cotStepNum      int      // current COT step number (1-based)
-	lastStatus      string   // latest progress text — shown in spinner line (like web UI status bar)
-	pendingProgress []string // progress messages queued during active streaming, flushed on step end
 
 	// Login flow state
 	loginURL  string
@@ -139,20 +123,16 @@ func initialModel(version, profile string) model {
 	}
 
 	return model{
-		input:        ti,
-		spinner:      sp,
-		version:      version,
-		profile:      profile,
-		cfg:          cfg,
-		client:       client,
-		mode:         modeIdle,
-		cotAccum:     make(map[string]string),
-		cotPrinted:   make(map[string]int),
-		cotDescShown: make(map[string]bool),
-		seenSources:  make(map[string]bool),
-		seenProgress: make(map[string]bool),
-		history:      make([]string, 0),
-		historyIdx:   -1,
+		input:      ti,
+		spinner:    sp,
+		version:    version,
+		profile:    profile,
+		cfg:        cfg,
+		client:     client,
+		mode:       modeIdle,
+		processor:  NewStreamProcessor(),
+		history:    make([]string, 0),
+		historyIdx: -1,
 	}
 }
 
@@ -341,7 +321,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionCreatedMsg:
 		m.sessionID = msg.sessionID
 		cmds = append(cmds,
-			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Session: %s", truncateUUID(m.sessionID)))),
+			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Session: %s", m.sessionID))),
+		)
+		if consoleURL := m.cfg.ConsoleSessionURL(m.sessionID); consoleURL != "" {
+			cmds = append(cmds, tea.Println(dimStyle.Render(fmt.Sprintf("    🔗 %s", consoleURL))))
+		}
+		cmds = append(cmds,
 			beginStream(m.client, m.cfg.ProjectID, m.sessionID, m.streamPrompt),
 		)
 		return m, tea.Batch(cmds...)
@@ -351,11 +336,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if printCmd != nil {
 			cmds = append(cmds, printCmd)
 		}
-		// Keep reading from the stream channel
+		// Keep reading from the stream channel.
+		// IMPORTANT: use tea.Sequence (not tea.Batch) so that all print
+		// commands are sent to the main loop BEFORE we read the next chunk.
+		// With tea.Batch, waitForStream resolves immediately from the
+		// buffered channel, sending a new streamChunkMsg that races ahead
+		// of queued prints — causing output to stall then dump in bursts.
 		if activeStreamCh != nil {
 			cmds = append(cmds, waitForStream(activeStreamCh))
 		}
-		return m, tea.Batch(cmds...)
+		return m, tea.Sequence(cmds...)
 
 	case streamDoneMsg:
 		m.mode = modeIdle
@@ -363,21 +353,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.sessionID != "" {
 			m.sessionID = msg.sessionID
 		}
-		// Flush any remaining chat buffer
+		// Flush any remaining buffers via the processor
 		var flushCmds []tea.Cmd
-		if m.chatBuffer != "" {
-			flushCmds = append(flushCmds, tea.Println("  "+m.chatBuffer))
-			m.chatBuffer = ""
+		for _, ev := range m.processor.Flush() {
+			flushCmds = append(flushCmds, tea.Println(renderOutputEvent(ev)))
 		}
-		// Flush any remaining COT buffer
-		if m.activeCotID != "" {
-			buf := m.getCOTBuffer(m.activeCotID)
-			if buf != "" && strings.TrimSpace(buf) != "" {
-				flushCmds = append(flushCmds, tea.Println("    "+buf))
-			}
-		}
-		// Flush any progress queued during the final streaming phase
-		flushCmds = append(flushCmds, m.flushPendingProgress()...)
 		flushCmds = append(flushCmds,
 			tea.Println(""),
 			tea.Println(successMsgStyle.Render("  ✓ Investigation complete")),
@@ -470,6 +450,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionReportMsg:
 		return m.handleSessionReport(msg)
+
+	case addConnectionResultMsg:
+		return m.handleAddConnectionResult(msg)
 	}
 
 	// Update sub-components
@@ -511,6 +494,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 //
 // Inline mode: View() only shows the input prompt + hints.
 // All output is printed above via tea.Println.
+// During streaming, only the spinner + status is shown (single line).
+// This prevents terminal rendering artifacts where spinner text bleeds
+// into the permanent scrollback output.
 
 func (m model) View() string {
 	if !m.ready {
@@ -519,12 +505,13 @@ func (m model) View() string {
 
 	var s strings.Builder
 
-	// Input or streaming indicator
 	if m.mode == modeStreaming {
 		status := "Investigating..."
-		if m.lastStatus != "" {
-			status = m.lastStatus
+		if ps := m.processor.LastStatus(); ps != "" {
+			status = ps
 		}
+		// Add blank lines to prevent spinner from overwriting last printed content
+		s.WriteString("\n\n")
 		s.WriteString(m.spinner.View() + " " + statusStyle.Render(status))
 	} else {
 		s.WriteString(m.input.View())
@@ -602,17 +589,37 @@ func (m model) renderCommandMenu(matches []slashCmd) string {
 }
 
 // matchCommands returns all slash commands matching a prefix.
+// Top-level commands (no spaces) are shown while the user is still typing the
+// base command. Subcommands (contain a space) only appear once the user has
+// typed a space after the base command.
 func matchCommands(prefix string) []slashCmd {
 	prefix = strings.ToLower(prefix)
-	// Just "/" with nothing else — show all
+	// Just "/" — show only top-level commands
 	if prefix == "/" {
-		return slashCommands
+		var top []slashCmd
+		for _, c := range slashCommands {
+			if !strings.Contains(c.name[1:], " ") {
+				top = append(top, c)
+			}
+		}
+		return top
 	}
+	prefixHasSpace := strings.Contains(prefix[1:], " ")
 	var matches []slashCmd
 	for _, c := range slashCommands {
-		if strings.HasPrefix(c.name, prefix) {
-			matches = append(matches, c)
+		if !strings.HasPrefix(c.name, prefix) {
+			continue
 		}
+		nameHasSpace := strings.Contains(c.name[1:], " ")
+		// Only surface subcommands when the user has already typed a space
+		if nameHasSpace && !prefixHasSpace {
+			continue
+		}
+		// Only surface top-level commands when the user hasn't typed a space
+		if !nameHasSpace && prefixHasSpace {
+			continue
+		}
+		matches = append(matches, c)
 	}
 	return matches
 }
@@ -620,303 +627,63 @@ func matchCommands(prefix string) []slashCmd {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 func (m *model) resetStreamState() {
-	m.chatPrinted = 0
-	m.chatBuffer = ""
-	m.cotAccum = make(map[string]string)
-	m.cotPrinted = make(map[string]int)
-	m.cotDescShown = make(map[string]bool)
-	m.seenSources = make(map[string]bool)
-	m.seenProgress = make(map[string]bool)
+	m.processor = NewStreamProcessor()
 	m.streamPrompt = ""
-	m.cotStepActive = false
-	m.cotTextActive = false
-	m.chatStreaming = false
-	m.lastStatus = ""
-	m.pendingProgress = nil
-	m.activeCotID = ""
-	m.cotStepNum = 0
 }
 
-// handleStreamChunk processes a streaming event and returns a tea.Println command.
+// handleStreamChunk processes a streaming event via the StreamProcessor
+// and converts structured OutputEvents into styled tea.Println commands.
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
-	switch msg.contentType {
-
-	// ── Progress: always update spinner, queue during active streaming ───
-	case "CONTENT_TYPE_PROGRESS_STATUS":
-		display := service.ExtractProgressDisplay(msg.text)
-		// Always update the spinner line — mirrors the web UI's status bar.
-		m.lastStatus = display
-
-		normKey := service.NormalizeProgress(display)
-		if m.seenProgress[normKey] {
-			return nil // already shown or queued
-		}
-		m.seenProgress[normKey] = true
-
-		if m.cotTextActive || m.chatStreaming {
-			// During active text streaming, queue for later to prevent
-			// interleaving mid-paragraph. Will flush on step end.
-			m.pendingProgress = append(m.pendingProgress, display)
-			return nil
-		}
-		return tea.Println(statusStyle.Render("  ⟳ " + display))
-
-	// ── Sources: suppress while inside a COT step (header → end) ────────
-	// Sources between COT steps are fine, but within a step they'd break
-	// the visual grouping of header + investigation text.
-	case "CONTENT_TYPE_SOURCES":
-		if m.cotStepActive || m.chatStreaming {
-			return nil
-		}
-		label := parseSourceLabel(msg.text)
-		if !m.seenSources[label] {
-			m.seenSources[label] = true
-			return tea.Println(sourceHeaderStyle.Render("  📎 ") + label)
-		}
-
-	// ── Chain of Thought ────────────────────────────────────────────────
-	case "CONTENT_TYPE_CHAIN_OF_THOUGHT":
-		return m.handleCOTChunk(msg)
-
-	// ── Chat Response ───────────────────────────────────────────────────
-	case "CONTENT_TYPE_CHAT_RESPONSE":
-		var preCmds []tea.Cmd
-
-		// Chat starts → finalize any active COT step and flush queued progress
-		if m.cotStepActive || m.cotTextActive {
-			m.finishCOTStreaming()
-		}
-		// Flush any progress queued during the COT phase (e.g. CheckPlan results)
-		preCmds = append(preCmds, m.flushPendingProgress()...)
-
-		m.chatStreaming = true
-
-		newText := ""
-		if msg.eventType == "chat_delta" {
-			newText = msg.text
-			m.chatPrinted += len(newText)
-		} else {
-			if len(msg.text) > m.chatPrinted {
-				newText = msg.text[m.chatPrinted:]
-				m.chatPrinted = len(msg.text)
-			}
-		}
-		if newText == "" {
-			if len(preCmds) > 0 {
-				return tea.Sequence(preCmds...)
-			}
-			return nil
-		}
-
-		combined := m.chatBuffer + newText
-		lines := strings.Split(combined, "\n")
-
-		for i, line := range lines {
-			if i < len(lines)-1 {
-				preCmds = append(preCmds, tea.Println("  "+line))
-			} else {
-				m.chatBuffer = line
-			}
-		}
-
-		if len(preCmds) > 0 {
-			return tea.Sequence(preCmds...)
-		}
-
-	case "CONTENT_TYPE_FOLLOW_UP_SUGGESTIONS":
-		// Follow-ups arrive after chat response is done
-		m.chatStreaming = false
-		m.cotStepActive = false
-		m.cotTextActive = false
-
-		parts := strings.Split(msg.text, "\n")
-		var printCmds []tea.Cmd
-		printCmds = append(printCmds, tea.Println(""))
-		printCmds = append(printCmds, tea.Println(followUpStyle.Render("  💡 Follow-up suggestions:")))
-		for i, p := range parts {
-			if strings.TrimSpace(p) != "" {
-				printCmds = append(printCmds, tea.Println(followUpStyle.Render(fmt.Sprintf("     %d. %s", i+1, p))))
-			}
-		}
-		return tea.Sequence(printCmds...)
-
-	case "CONTENT_TYPE_SESSION_NAME":
-		return tea.Println(sessionNameStyle.Render("  📛 " + msg.text))
-
-	case "CONTENT_TYPE_ERROR_MESSAGE":
-		// Suppressed: these are internal query retry/fix messages (e.g. SQL errors),
-		// not meant for display. The web UI also ignores them.
-
-	case "CONTENT_TYPE_EXECUTION_TIME":
-		return tea.Println(dimStyle.Render("  ⏱  " + msg.text))
-	}
-
-	return nil
-}
-
-// handleCOTChunk handles chain-of-thought events with proper step tracking
-// and trivial content filtering.
-func (m *model) handleCOTChunk(msg streamChunkMsg) tea.Cmd {
-	id, desc, explanation, investigation, _ := parseCOTFields(msg.text)
-	cotID := id
-	if cotID == "" {
-		cotID = desc
-	}
-	if cotID == "" {
-		cotID = "_default"
-	}
-
-	var printCmds []tea.Cmd
-
-	// Detect new COT step: if the ID changed from what we're tracking,
-	// finalize the previous step and start a new one.
-	isNewStep := m.activeCotID != "" && cotID != m.activeCotID
-	if isNewStep {
-		// Flush the previous COT step's buffer
-		flushCmds := m.flushCOTBuffer(m.activeCotID)
-		printCmds = append(printCmds, flushCmds...)
-		m.cotStepActive = false
-		m.cotTextActive = false
-		// Print any progress that was queued during the previous step
-		printCmds = append(printCmds, m.flushPendingProgress()...)
-		// Add a blank line separator between COT steps
-		printCmds = append(printCmds, tea.Println(""))
-	}
-
-	// Track the active COT ID
-	if m.activeCotID != cotID {
-		m.activeCotID = cotID
-	}
-
-	// Helper: show header if not yet shown for this COT.
-	showHeader := func() {
-		if !m.cotDescShown[cotID] && desc != "" {
-			m.cotDescShown[cotID] = true
-			m.cotStepNum++
-			// Do NOT reset seenProgress/seenSources here — that causes
-			// duplicate progress messages across COT steps.
-			printCmds = append(printCmds, tea.Println(cotHeaderStyle.Render(
-				fmt.Sprintf("  🔍 %s", desc))))
-			if explanation != "" {
-				printCmds = append(printCmds, tea.Println(cotExplanationStyle.Render(
-					"     ↳ "+explanation)))
-			}
-		}
-	}
-
-	// Helper: print text line-by-line with buffering for partial lines
-	printLines := func(text string) {
-		combined := m.getCOTBuffer(cotID) + text
-		lines := strings.Split(combined, "\n")
-		for i, line := range lines {
-			if i < len(lines)-1 {
-				if strings.TrimSpace(line) != "" {
-					printCmds = append(printCmds, tea.Println("    "+line))
-				}
-			} else {
-				m.setCOTBuffer(cotID, line)
-			}
-		}
-	}
-
-	switch msg.eventType {
-	case "cot_start":
-		// Mark step as active — suppresses sources until cot_end.
-		// Don't set cotTextActive yet — progress can still show before first delta.
-		m.cotStepActive = true
-		showHeader()
-
-	case "cot_delta":
-		showHeader()
-		// Delta mode: investigation IS the new text to append.
-		// Do NOT filter with isTrivialContent — deltas are short fragments
-		// that are part of real content, not placeholders.
-		if investigation != "" {
-			m.cotTextActive = true
-			printLines(investigation)
-		}
-
-	case "cot_end":
-		// Flush remaining buffer for this COT
-		flushCmds := m.flushCOTBuffer(cotID)
-		printCmds = append(printCmds, flushCmds...)
-		m.cotStepActive = false
-		m.cotTextActive = false
-		// Print any progress that was queued during this step
-		printCmds = append(printCmds, m.flushPendingProgress()...)
-
-	default:
-		// Legacy non-delta: investigation contains full accumulated text.
-		// stream.go now sends only the active (IN_PROGRESS) step.
-		m.cotStepActive = true
-		showHeader()
-
-		// Filter only exact placeholder text in legacy mode (full text, not fragments)
-		if investigation != "" && !service.IsTrivialContent(investigation) {
-			prev := m.cotAccum[cotID]
-			if len(investigation) > len(prev) {
-				m.cotTextActive = true
-				newText := investigation[len(prev):]
-				m.cotAccum[cotID] = investigation
-				printLines(newText)
-			}
-		}
-	}
-
-	if len(printCmds) > 0 {
-		return tea.Sequence(printCmds...)
-	}
-
-	return nil
-}
-
-// finishCOTStreaming flushes the active COT step and marks streaming as done.
-func (m *model) finishCOTStreaming() {
-	if m.activeCotID != "" {
-		buf := m.getCOTBuffer(m.activeCotID)
-		if buf != "" && strings.TrimSpace(buf) != "" {
-			m.setCOTBuffer(m.activeCotID, "")
-		}
-	}
-	m.cotStepActive = false
-	m.cotTextActive = false
-}
-
-// flushCOTBuffer flushes the line buffer for a given COT ID and returns
-// any tea.Cmd needed to print remaining content.
-func (m *model) flushCOTBuffer(cotID string) []tea.Cmd {
-	var cmds []tea.Cmd
-	buf := m.getCOTBuffer(cotID)
-	if buf != "" && strings.TrimSpace(buf) != "" {
-		cmds = append(cmds, tea.Println("    "+buf))
-		m.setCOTBuffer(cotID, "")
-	}
-	return cmds
-}
-
-// flushPendingProgress prints any progress messages that were queued during
-// active COT/chat streaming. Called on step transitions and stream end.
-func (m *model) flushPendingProgress() []tea.Cmd {
-	if len(m.pendingProgress) == 0 {
+	events := m.processor.Process(msg)
+	if len(events) == 0 {
 		return nil
 	}
 	var cmds []tea.Cmd
-	for _, display := range m.pendingProgress {
-		cmds = append(cmds, tea.Println(statusStyle.Render("  ⟳ "+display)))
+	for _, ev := range events {
+		// Skip progress events - they're shown in the spinner only
+		if ev.Type == OutputProgress {
+			continue
+		}
+		rendered := renderOutputEvent(ev)
+		cmds = append(cmds, tea.Println(rendered))
 	}
-	m.pendingProgress = nil
-	return cmds
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Sequence(cmds...)
 }
 
-// COT line buffer per ID (stored in cotAccum with a special prefix)
-func (m *model) getCOTBuffer(cotID string) string {
-	key := "_buf_" + cotID
-	return m.cotAccum[key]
-}
-
-func (m *model) setCOTBuffer(cotID string, buf string) {
-	key := "_buf_" + cotID
-	m.cotAccum[key] = buf
+// renderOutputEvent converts a structured OutputEvent into a styled string.
+// This is the single rendering point — change styles or hide blocks here.
+func renderOutputEvent(ev OutputEvent) string {
+	switch ev.Type {
+	case OutputProgress:
+		// Progress is shown in the spinner (View), not printed to scrollback.
+		// This keeps the output clean - only meaningful content is permanent.
+		return ""
+	case OutputCOTHeader:
+		return cotHeaderStyle.Render(fmt.Sprintf("  🔍 %s", ev.Text))
+	case OutputCOTExplanation:
+		return cotExplanationStyle.Render("     ↳ " + ev.Text)
+	case OutputCOTText:
+		return "    " + ev.Text
+	case OutputChat:
+		return "  " + ev.Text
+	case OutputFollowUpHeader:
+		return followUpStyle.Render("  💡 " + ev.Text)
+	case OutputFollowUpItem:
+		return followUpStyle.Render(fmt.Sprintf("     %d. %s", ev.Index, ev.Text))
+	case OutputSource:
+		return sourceHeaderStyle.Render("  📎 ") + ev.Text
+	case OutputSessionName:
+		return sessionNameStyle.Render("  📛 " + ev.Text)
+	case OutputExecTime:
+		return dimStyle.Render("  ⏱  " + ev.Text)
+	case OutputBlank:
+		return ""
+	default:
+		return ev.Text
+	}
 }
 
 func serverStr(cfg *config.Config) string {

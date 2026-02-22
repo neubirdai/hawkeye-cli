@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -177,17 +178,32 @@ func TestFindActiveCOTPart(t *testing.T) {
 }
 
 func TestMatchCommands(t *testing.T) {
+	// Count top-level commands (no spaces in name after the leading slash).
+	topLevelCount := 0
+	for _, c := range slashCommands {
+		if !strings.Contains(c.name[1:], " ") {
+			topLevelCount++
+		}
+	}
+
 	tests := []struct {
 		prefix  string
 		wantLen int
 	}{
-		{"/", len(slashCommands)},
-		{"/h", 1}, // /help
-		{"/s", 6}, // /score, /session, /session-report, /sessions, /set, /summary
-		{"/q", 2}, // /queries, /quit
-		{"/xyz", 0},
-		{"/login", 1},
-		{"/se", 4}, // /session, /session-report, /sessions, /set
+		{"/", topLevelCount},
+		{"/h", 1},                // /help
+		{"/s", 6},                // /score, /session, /session-report, /sessions, /set, /summary
+		{"/q", 2},                // /queries, /quit
+		{"/xyz", 0},              // no match
+		{"/login", 1},            // /login
+		{"/se", 4},               // /session, /session-report, /sessions, /set
+		{"/connections", 1},      // only /connections itself (no space yet)
+		{"/connections ", 2},     // subcommands: list, resources
+		{"/connections a", 0},    // no subcommands under connections starting with a
+		{"/connections list", 1}, // /connections list
+		{"/incidents", 1},        // only /incidents itself
+		{"/incidents ", 3},       // subcommands: add pagerduty, add firehydrant, add incidentio
+		{"/incidents a", 3},      // /incidents add pagerduty, add firehydrant, add incidentio
 	}
 
 	for _, tt := range tests {

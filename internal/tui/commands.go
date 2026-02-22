@@ -77,6 +77,8 @@ func (m model) dispatchCommand(input string) (tea.Model, tea.Cmd) {
 		return m.cmdDiscover()
 	case "/session-report":
 		return m.cmdSessionReport(args)
+	case "/incidents":
+		return m.cmdIncidents(args)
 	case "/session":
 		return m.cmdSetSession(args)
 	case "/quit", "/exit", "/q":
@@ -108,7 +110,8 @@ func (m model) cmdHelp() (tea.Model, tea.Cmd) {
 		tea.Println("  " + pad(hintKeyStyle.Render("/score <uuid>"), 30) + dimStyle.Render("Show RCA quality scores")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/link <uuid>"), 30) + dimStyle.Render("Get web UI URL for session")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/report"), 30) + dimStyle.Render("Show incident analytics")),
-		tea.Println("  " + pad(hintKeyStyle.Render("/connections"), 30) + dimStyle.Render("List data source connections")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/connections"), 30) + dimStyle.Render("Manage data source connections")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/incidents"), 30) + dimStyle.Render("Add incident tool connections (add)")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/instructions"), 30) + dimStyle.Render("Manage project instructions")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/investigate-alert <id>"), 30) + dimStyle.Render("Investigate an alert")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/queries [uuid]"), 30) + dimStyle.Render("Show investigation queries")),
@@ -207,6 +210,12 @@ func (m model) handleLoginPassSubmit(value string) (tea.Model, tea.Cmd) {
 			}
 
 			cfg.Server = backendURL
+			// Frontend URL should not have /api suffix
+			frontendURL := strings.TrimRight(serverURL, "/")
+			if idx := strings.Index(frontendURL, "/api"); idx > 0 {
+				frontendURL = frontendURL[:idx]
+			}
+			cfg.FrontendURL = frontendURL
 			cfg.Username = username
 			cfg.Token = loginResp.AccessToken
 
@@ -1146,6 +1155,23 @@ func (m model) cmdConnections(args []string) (tea.Model, tea.Cmd) {
 	// Subcommand dispatch
 	if len(args) > 0 {
 		switch args[0] {
+		case "list":
+			client := m.client
+			projectID := m.cfg.ProjectID
+			return m, tea.Sequence(
+				tea.Println(statusStyle.Render("  ⟳ Loading connections...")),
+				func() tea.Msg {
+					resp, err := client.ListConnections(projectID)
+					if err != nil {
+						return connectionsResultMsg{err: err}
+					}
+					var conns []service.ConnectionDisplay
+					for _, spec := range resp.Specs {
+						conns = append(conns, service.FormatConnection(spec))
+					}
+					return connectionsResultMsg{connections: conns}
+				},
+			)
 		case "resources":
 			if len(args) < 2 {
 				return m, tea.Println(warnMsgStyle.Render("  ! Usage: /connections resources <connection-uuid>"))
@@ -1176,9 +1202,9 @@ func (m model) cmdConnections(args []string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// No subcommand: list connections by default
 	client := m.client
 	projectID := m.cfg.ProjectID
-
 	return m, tea.Sequence(
 		tea.Println(statusStyle.Render("  ⟳ Loading connections...")),
 		func() tea.Msg {
@@ -1793,6 +1819,180 @@ func (m model) handleSessionReport(msg sessionReportMsg) (tea.Model, tea.Cmd) {
 
 	cmds = append(cmds, tea.Println(""))
 	return m, tea.Sequence(cmds...)
+}
+
+// ─── /incidents (add connections: PagerDuty, FireHydrant, incident.io) ──────
+
+type addConnectionResultMsg struct {
+	label string // human-readable connection type, e.g. "PagerDuty"
+	name  string
+	uuid  string
+	err   error
+}
+
+func parseAddConnectionArgs(args []string) (name, apiKey string) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				i++
+				name = args[i]
+			}
+		case "--api-key":
+			if i+1 < len(args) {
+				i++
+				apiKey = args[i]
+			}
+		}
+	}
+	return
+}
+
+func (m model) cmdConnectionAddPagerDuty(args []string) (tea.Model, tea.Cmd) {
+	name, apiKey := parseAddConnectionArgs(args)
+	if name == "" || apiKey == "" {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /incidents add pagerduty --name <name> --api-key <key>"))
+	}
+	client := m.client
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Adding PagerDuty connection %q...", name))),
+		func() tea.Msg {
+			resp, err := client.AddConnection(&api.AddConnectionRequest{
+				Connection: api.AddConnectionInput{
+					Name:           name,
+					ConnectionType: "CONNECTION_TYPE_PAGERDUTY",
+					PagerdutyConnectionInfo: &api.PagerdutyConnectionInfo{
+						ApiAccessKey: apiKey,
+					},
+				},
+			})
+			if err != nil {
+				return addConnectionResultMsg{err: err}
+			}
+			if resp.Response.ErrorMessage != "" {
+				return addConnectionResultMsg{err: fmt.Errorf("%s", resp.Response.ErrorMessage)}
+			}
+			return addConnectionResultMsg{label: "PagerDuty", name: name, uuid: resp.Response.UUID}
+		},
+	)
+}
+
+func (m model) cmdConnectionAddFirehydrant(args []string) (tea.Model, tea.Cmd) {
+	name, apiKey := parseAddConnectionArgs(args)
+	if name == "" || apiKey == "" {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /incidents add firehydrant --name <name> --api-key <key>"))
+	}
+	client := m.client
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Adding FireHydrant connection %q...", name))),
+		func() tea.Msg {
+			resp, err := client.AddConnection(&api.AddConnectionRequest{
+				Connection: api.AddConnectionInput{
+					Name:           name,
+					ConnectionType: "CONNECTION_TYPE_FIREHYDRANT",
+					FirehydrantConnectionInfo: &api.FirehydrantConnectionInfo{
+						ApiKey: apiKey,
+					},
+				},
+			})
+			if err != nil {
+				return addConnectionResultMsg{err: err}
+			}
+			if resp.Response.ErrorMessage != "" {
+				return addConnectionResultMsg{err: fmt.Errorf("%s", resp.Response.ErrorMessage)}
+			}
+			return addConnectionResultMsg{label: "FireHydrant", name: name, uuid: resp.Response.UUID}
+		},
+	)
+}
+
+func (m model) cmdConnectionAddIncidentio(args []string) (tea.Model, tea.Cmd) {
+	name, apiKey := parseAddConnectionArgs(args)
+	if name == "" || apiKey == "" {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /incidents add incidentio --name <name> --api-key <key>"))
+	}
+	client := m.client
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Adding incident.io connection %q...", name))),
+		func() tea.Msg {
+			resp, err := client.AddConnection(&api.AddConnectionRequest{
+				Connection: api.AddConnectionInput{
+					Name:           name,
+					ConnectionType: "CONNECTION_TYPE_INCIDENTIO",
+					IncidentioConnectionInfo: &api.IncidentioConnectionInfo{
+						ApiKey: apiKey,
+					},
+				},
+			})
+			if err != nil {
+				return addConnectionResultMsg{err: err}
+			}
+			if resp.Response.ErrorMessage != "" {
+				return addConnectionResultMsg{err: fmt.Errorf("%s", resp.Response.ErrorMessage)}
+			}
+			return addConnectionResultMsg{label: "incident.io", name: name, uuid: resp.Response.UUID}
+		},
+	)
+}
+
+func (m model) handleAddConnectionResult(msg addConnectionResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Add connection failed: %v", msg.err)))
+	}
+	return m, tea.Sequence(
+		tea.Println(""),
+		tea.Println(dimStyle.Render(fmt.Sprintf("  %s connection added:", msg.label))),
+		tea.Println(""),
+		tea.Println(fmt.Sprintf("  %-12s %s", dimStyle.Render("name:"), msg.name)),
+		tea.Println(fmt.Sprintf("  %-12s %s", dimStyle.Render("uuid:"), msg.uuid)),
+		tea.Println(""),
+	)
+}
+
+func (m model) cmdIncidents(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+	if m.cfg.ProjectID == "" {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Run /projects first."))
+	}
+
+	pad := func(s string, w int) string {
+		for len(s) < w {
+			s += " "
+		}
+		return s
+	}
+
+	if len(args) == 0 {
+		return m, tea.Sequence(
+			tea.Println(""),
+			tea.Println(dimStyle.Render("  /incidents subcommands:")),
+			tea.Println(""),
+			tea.Println("  "+pad(hintKeyStyle.Render("add pagerduty"), 30)+dimStyle.Render("Add a PagerDuty connection (--name, --api-key)")),
+			tea.Println("  "+pad(hintKeyStyle.Render("add firehydrant"), 30)+dimStyle.Render("Add a FireHydrant connection (--name, --api-key)")),
+			tea.Println("  "+pad(hintKeyStyle.Render("add incidentio"), 30)+dimStyle.Render("Add an incident.io connection (--name, --api-key)")),
+			tea.Println(""),
+		)
+	}
+
+	if args[0] == "add" {
+		if len(args) < 2 {
+			return m, tea.Println(warnMsgStyle.Render("  ! Usage: /incidents add <type> --name <name> --api-key <key>  (types: pagerduty, firehydrant, incidentio)"))
+		}
+		switch args[1] {
+		case "pagerduty":
+			return m.cmdConnectionAddPagerDuty(args[2:])
+		case "firehydrant":
+			return m.cmdConnectionAddFirehydrant(args[2:])
+		case "incidentio":
+			return m.cmdConnectionAddIncidentio(args[2:])
+		default:
+			return m, tea.Println(warnMsgStyle.Render(fmt.Sprintf("  ! Unknown type %q. Types: pagerduty, firehydrant, incidentio", args[1])))
+		}
+	}
+
+	return m, tea.Println(warnMsgStyle.Render(fmt.Sprintf("  ! Unknown subcommand %q — try /incidents add", args[0])))
 }
 
 // ─── /clear ─────────────────────────────────────────────────────────────────
