@@ -48,6 +48,7 @@ type StreamProcessor struct {
 	cotStepNum    int
 	cotStepActive bool
 	cotTextActive bool
+	cotDeltaMode  bool // true if using cot_start/cot_delta/cot_end protocol
 
 	// Chat state
 	chatPrinted   int
@@ -136,19 +137,40 @@ func (sp *StreamProcessor) handleProgress(msg streamChunkMsg) []OutputEvent {
 	display := extractProgressDisplay(msg.text)
 	sp.lastStatus = display
 
+	var out []OutputEvent
+
+	// In legacy mode (no cot_start/cot_end), progress arriving means COT is done.
+	// Flush the COT buffer immediately BEFORE checking for duplicates.
+	// This ensures the last COT line is printed even if progress is a duplicate.
+	if sp.cotTextActive && sp.activeCotID != "" && !sp.cotDeltaMode {
+		out = append(out, sp.flushCOTBuffer(sp.activeCotID)...)
+		sp.cotTextActive = false
+		sp.cotStepActive = false
+	}
+
+	// If chat was streaming, progress arriving means chat is done.
+	// Flush the chat buffer immediately BEFORE checking for duplicates.
+	if sp.chatStreaming && sp.chatBuffer != "" && strings.TrimSpace(sp.chatBuffer) != "" {
+		out = append(out, OutputEvent{Type: OutputChat, Text: sp.chatBuffer})
+		sp.chatBuffer = ""
+		sp.chatStreaming = false
+	}
+
+	// Now check for duplicate progress (after flushing COT/chat)
 	normKey := normalizeProgress(display)
 	if sp.seenProgress[normKey] {
-		return nil
+		return out // may contain flushed COT/chat even if progress is duplicate
 	}
 	sp.seenProgress[normKey] = true
 
-	if sp.cotTextActive || sp.chatStreaming {
-		// Queue for later to prevent interleaving mid-paragraph.
+	// In delta mode, COT is still active — queue progress to prevent interleaving
+	if sp.cotTextActive && sp.cotDeltaMode {
 		sp.pendingProgress = append(sp.pendingProgress, display)
-		return nil
+		return out
 	}
 
-	return []OutputEvent{{Type: OutputProgress, Text: display}}
+	out = append(out, OutputEvent{Type: OutputProgress, Text: display})
+	return out
 }
 
 // ─── Sources ────────────────────────────────────────────────────────────────
@@ -220,18 +242,30 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 	}
 
 	// Helper: print complete lines, buffer the last partial line.
+	// Also buffers lines that look like incomplete list items (e.g., just "-" or "1.")
+	// since the backend may replace them with full content.
 	printLines := func(text string) {
 		combined := sp.cotBuffers[cotID] + text
 		lines := strings.Split(combined, "\n")
 		for i, line := range lines {
 			if i < len(lines)-1 {
-				if strings.TrimSpace(line) != "" {
-					out = append(out, OutputEvent{
-						Type:  OutputCOTText,
-						Text:  line,
-						CotID: cotID,
-					})
+				trimmed := strings.TrimSpace(line)
+				// Skip empty lines
+				if trimmed == "" {
+					continue
 				}
+				// Buffer incomplete list markers - backend may replace them
+				// Examples: "-", "- ", "1.", "1. ", "* ", etc.
+				if isIncompleteListItem(trimmed) {
+					// Keep this line and all remaining lines in buffer
+					sp.cotBuffers[cotID] = strings.Join(lines[i:], "\n")
+					return // stop processing, everything is buffered
+				}
+				out = append(out, OutputEvent{
+					Type:  OutputCOTText,
+					Text:  line,
+					CotID: cotID,
+				})
 			} else {
 				sp.cotBuffers[cotID] = line
 			}
@@ -240,6 +274,7 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 
 	switch msg.eventType {
 	case "cot_start":
+		sp.cotDeltaMode = true // mark that we're using delta protocol
 		sp.cotStepActive = true
 		showHeader()
 
@@ -261,11 +296,9 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 		sp.cotStepActive = true
 		showHeader()
 
-		hasNewText := false
 		if investigation != "" && !isTrivialContent(investigation) {
 			prev := sp.cotAccum[cotID]
 			if len(investigation) > len(prev) {
-				hasNewText = true
 				sp.cotTextActive = true
 				newText := investigation[len(prev):]
 				sp.cotAccum[cotID] = investigation
@@ -273,15 +306,14 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 			}
 		}
 
-		// Flush when completed or when no new text but buffer has content.
-		shouldFlush := isCompleted || (!hasNewText && sp.cotBuffers[cotID] != "")
-		if shouldFlush {
+		// Only flush when explicitly completed.
+		// Don't flush just because no new text arrived - the backend may send
+		// duplicate events while streaming character by character.
+		if isCompleted {
 			out = append(out, sp.flushCOTBuffer(cotID)...)
-			if isCompleted {
-				sp.cotStepActive = false
-				sp.cotTextActive = false
-				out = append(out, sp.flushPendingProgress()...)
-			}
+			sp.cotStepActive = false
+			sp.cotTextActive = false
+			out = append(out, sp.flushPendingProgress()...)
 		}
 	}
 
@@ -433,4 +465,27 @@ func extractProgressDisplay(text string) string {
 		}
 	}
 	return text
+}
+
+// isIncompleteListItem checks if a line looks like an incomplete list marker
+// that the backend may replace with full content (e.g., "-" -> "- 400").
+func isIncompleteListItem(trimmed string) bool {
+	// Bullet list markers: "-", "- ", "*", "* "
+	if trimmed == "-" || trimmed == "*" || trimmed == "- " || trimmed == "* " {
+		return true
+	}
+	// Numbered list markers: "1.", "1. ", "2.", etc.
+	if len(trimmed) <= 3 {
+		for i, c := range trimmed {
+			if i == len(trimmed)-1 {
+				// Last char should be '.' or '. '
+				if c == '.' {
+					return true
+				}
+			} else if c < '0' || c > '9' {
+				break
+			}
+		}
+	}
+	return false
 }

@@ -136,36 +136,44 @@ func TestProgressImmediate(t *testing.T) {
 	}
 }
 
-func TestProgressQueuedDuringCOT(t *testing.T) {
+func TestProgressFlushesCOTBuffer(t *testing.T) {
 	sp := NewStreamProcessor()
 
-	// Start a COT step with text (sets cotTextActive)
-	sp.Process(cotLegacyMsg("cot1", "Analyzing", "## Summary\nFirst line\n", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
+	// Start a COT step with text ending in partial line (no trailing \n)
+	sp.Process(cotLegacyMsg("cot1", "Analyzing", "## Summary\nPartial line", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
 
-	// Progress during active COT text should be queued
+	// Progress arriving should flush the COT buffer and emit progress
 	out := sp.Process(progressMsg("(Loading Programs)"))
-	if len(out) != 0 {
-		t.Errorf("expected progress to be queued, got %d events", len(out))
+
+	// Should have flushed COT text AND emitted progress
+	cotTexts := collectText(out, OutputCOTText)
+	if len(cotTexts) != 1 || cotTexts[0] != "Partial line" {
+		t.Errorf("expected COT buffer to flush, got %v", cotTexts)
 	}
 
-	// Progress should flush when COT completes
-	out = sp.Process(cotLegacyMsg("cot1", "Analyzing", "## Summary\nFirst line\n", "CHAIN_OF_THOUGHT_STATUS_COMPLETED"))
 	progressTexts := collectText(out, OutputProgress)
 	if len(progressTexts) != 1 || progressTexts[0] != "Loading Programs" {
-		t.Errorf("expected queued progress to flush, got %v", progressTexts)
+		t.Errorf("expected progress to emit, got %v", progressTexts)
 	}
 }
 
-func TestProgressQueuedDuringChat(t *testing.T) {
+func TestProgressFlushesChatBuffer(t *testing.T) {
 	sp := NewStreamProcessor()
 
-	// Start chat streaming
+	// Start chat streaming with partial line
 	sp.Process(chatDeltaMsg("Hello "))
 
-	// Progress during chat should be queued
+	// Progress arriving means chat is done — should flush chat buffer and emit progress
 	out := sp.Process(progressMsg("(Working)"))
-	if len(out) != 0 {
-		t.Errorf("expected progress to be queued during chat, got %d events", len(out))
+
+	chatTexts := collectText(out, OutputChat)
+	if len(chatTexts) != 1 || chatTexts[0] != "Hello " {
+		t.Errorf("expected flushed chat buffer, got %v", chatTexts)
+	}
+
+	progressTexts := collectText(out, OutputProgress)
+	if len(progressTexts) != 1 || progressTexts[0] != "Working" {
+		t.Errorf("expected progress to emit, got %v", progressTexts)
 	}
 }
 
@@ -278,15 +286,24 @@ func TestCOTLegacyCompleted(t *testing.T) {
 	}
 }
 
-func TestCOTLegacyNoNewTextFlush(t *testing.T) {
+func TestCOTLegacyNoNewTextNoFlush(t *testing.T) {
 	sp := NewStreamProcessor()
 
 	// First event: partial line buffered
 	sp.Process(cotLegacyMsg("cot1", "Analyzing", "## Summary\npartial", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
 
-	// Second event: same text, still in progress — should flush buffer anyway
+	// Second event: same text, still in progress — should NOT flush buffer
+	// because the backend may send duplicate events while streaming char-by-char
 	out := sp.Process(cotLegacyMsg("cot1", "Analyzing", "## Summary\npartial", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
 	cotTexts := collectText(out, OutputCOTText)
+	if len(cotTexts) != 0 {
+		t.Errorf("no-new-text event should NOT flush buffer, got %v", cotTexts)
+	}
+
+	// Buffer should still contain "partial"
+	// Verify by completing the COT and checking flush
+	out = sp.Process(cotLegacyMsg("cot1", "Analyzing", "## Summary\npartial", "CHAIN_OF_THOUGHT_STATUS_COMPLETED"))
+	cotTexts = collectText(out, OutputCOTText)
 	found := false
 	for _, t := range cotTexts {
 		if strings.Contains(t, "partial") {
@@ -295,7 +312,7 @@ func TestCOTLegacyNoNewTextFlush(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("no-new-text event should flush buffer, got %v", cotTexts)
+		t.Errorf("completion should flush buffer with 'partial', got %v", cotTexts)
 	}
 }
 
@@ -440,26 +457,15 @@ func TestSourceShownOutsideCOT(t *testing.T) {
 func TestFlushAll(t *testing.T) {
 	sp := NewStreamProcessor()
 
-	// Set up state: COT buffer, chat buffer, pending progress
-	sp.Process(cotLegacyMsg("cot1", "Analyzing", "buffered cot", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
-
-	// Transition to chat to test chat buffer
+	// Set up state: chat buffer with partial line
 	sp.Process(chatDeltaMsg("buffered chat"))
 
-	// Queue a progress
-	sp.Process(progressMsg("(Pending Step)"))
-
-	// Flush everything
+	// Flush everything (chat buffer should be flushed)
 	out := sp.Flush()
 
 	chatTexts := collectText(out, OutputChat)
-	progressTexts := collectText(out, OutputProgress)
-
 	if len(chatTexts) != 1 || chatTexts[0] != "buffered chat" {
 		t.Errorf("expected flushed chat, got %v", chatTexts)
-	}
-	if len(progressTexts) != 1 || progressTexts[0] != "Pending Step" {
-		t.Errorf("expected flushed progress, got %v", progressTexts)
 	}
 }
 
