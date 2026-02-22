@@ -34,7 +34,7 @@ type HawkeyeAPI interface {
 	ApplySessionInstruction(sessionUUID, instrType, content string) error
 	RerunSession(sessionUUID string) (*RerunSessionResponse, error)
 	CreateSessionFromAlert(projectUUID, alertID string) (*NewSessionResponse, error)
-	GetInvestigationQueries(sessionUUID string) (*GetInvestigationQueriesResponse, error)
+	GetInvestigationQueries(projectUUID, sessionUUID string) (*GetInvestigationQueriesResponse, error)
 	DiscoverProjectResources(projectUUID, telemetryType, connectionType string) (*DiscoverResourcesResponse, error)
-	GetSessionReport(sessionUUID string) (*SessionReportResponse, error)
+	GetSessionReport(projectUUID string, sessionUUIDs []string) ([]SessionReportItem, error)
 }

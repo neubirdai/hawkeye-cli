@@ -824,11 +824,20 @@ func (c *Client) PutRating(projectUUID, sessionUUID string, itemIDs []RatingItem
 // --- Incident Report ---
 
 // IncidentTypeReport holds per-type analytics.
+// PriorityReport holds metrics for a single priority level within an incident type.
+type PriorityReport struct {
+	Priority              string  `json:"priority"`
+	TotalIncidents        int     `json:"total_incidents"`
+	InvestigatedIncidents int     `json:"investigated_incidents"`
+	PercentGrouped        float64 `json:"percent_grouped"`
+	AvgMTTR               float64 `json:"avg_mttr"`
+	AvgInvestigationTime  float64 `json:"avg_investigation_time_minutes"`
+	AvgTimeSavedMinutes   float64 `json:"avg_time_saved_minutes"`
+}
+
 type IncidentTypeReport struct {
-	Type                string  `json:"type"`
-	Count               int     `json:"count"`
-	AvgTimeSavedMinutes float64 `json:"avg_investigation_time_saved_minutes"`
-	NoiseReduction      float64 `json:"noise_reduction"`
+	Type            string           `json:"incident_type"`
+	PriorityReports []PriorityReport `json:"priority_reports"`
 }
 
 // IncidentReportResponse holds org-wide incident analytics.
@@ -858,7 +867,7 @@ func (c *Client) GetIncidentReport() (*IncidentReportResponse, error) {
 type ConnectionSpec struct {
 	UUID          string `json:"uuid"`
 	Name          string `json:"name"`
-	Type          string `json:"type"`
+	Type          string `json:"connection_type"`
 	SyncState     string `json:"sync_state"`
 	TrainingState string `json:"training_state"`
 }
@@ -884,12 +893,13 @@ func (c *Client) ListConnections(projectUUID string) (*ListConnectionsResponse, 
 type ConnectionDetail struct {
 	UUID          string            `json:"uuid"`
 	Name          string            `json:"name"`
-	Type          string            `json:"type"`
+	Type          string            `json:"connection_type"`
 	SyncState     string            `json:"sync_state"`
 	TrainingState string            `json:"training_state"`
 	CreateTime    string            `json:"create_time,omitempty"`
 	UpdateTime    string            `json:"update_time,omitempty"`
 	Config        map[string]string `json:"config,omitempty"`
+	Description   string            `json:"description,omitempty"`
 }
 
 // GetConnectionResponse holds the response from GET /v1/datasource/connection/{uuid}.
@@ -900,7 +910,7 @@ type GetConnectionResponse struct {
 
 func (c *Client) GetConnectionInfo(connUUID string) (*GetConnectionResponse, error) {
 	var resp GetConnectionResponse
-	if err := c.doJSON("GET", "/v1/datasource/connection/"+connUUID, nil, &resp); err != nil {
+	if err := c.doJSON("GET", "/v1/connection/"+connUUID, nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -1008,8 +1018,10 @@ type ListProjectConnectionsResponse struct {
 }
 
 func (c *Client) ListProjectConnections(projectUUID string) (*ListProjectConnectionsResponse, error) {
+	params := url.Values{}
+	params.Set("project_uuid", projectUUID)
 	var resp ListProjectConnectionsResponse
-	if err := c.doJSON("GET", "/v1/gendb/spec/"+projectUUID+"/datasource-connections", nil, &resp); err != nil {
+	if err := c.doJSON("GET", "/v1/connection?"+params.Encode(), nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -1091,21 +1103,26 @@ func (c *Client) DiscoverProjectResources(projectUUID, telemetryType, connection
 
 // --- Session Report ---
 
-// SessionReportResponse holds per-session report data.
-type SessionReportResponse struct {
-	Response  *GenDBResponse    `json:"response,omitempty"`
-	SessionID string            `json:"session_id,omitempty"`
-	TimeSaved *TimeSavedSummary `json:"time_saved,omitempty"`
-	Score     *AnalysisScore    `json:"score,omitempty"`
-	Summary   string            `json:"summary,omitempty"`
+// SessionReportItem holds a single session report entry.
+type SessionReportItem struct {
+	CreateTime  string `json:"create_time,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
+	SessionLink string `json:"session_link,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	TimeSaved   int    `json:"time_saved,omitempty"`
 }
 
-func (c *Client) GetSessionReport(sessionUUID string) (*SessionReportResponse, error) {
-	var resp SessionReportResponse
-	if err := c.doJSON("GET", "/v1/inference/session/"+sessionUUID+"/report", nil, &resp); err != nil {
+func (c *Client) GetSessionReport(projectUUID string, sessionUUIDs []string) ([]SessionReportItem, error) {
+	params := url.Values{}
+	for _, s := range sessionUUIDs {
+		params.Add("session_uuids", s)
+	}
+	params.Set("project_uuid", projectUUID)
+	var resp []SessionReportItem
+	if err := c.doJSON("GET", "/v1/inference/session_report?"+params.Encode(), nil, &resp); err != nil {
 		return nil, err
 	}
-	return &resp, nil
+	return resp, nil
 }
 
 // --- Investigation Enhancements ---
@@ -1152,12 +1169,27 @@ type GetInvestigationQueriesResponse struct {
 	Queries  []QueryExecution `json:"queries,omitempty"`
 }
 
-func (c *Client) GetInvestigationQueries(sessionUUID string) (*GetInvestigationQueriesResponse, error) {
-	var resp GetInvestigationQueriesResponse
-	if err := c.doJSON("GET", "/v1/inference/session/"+sessionUUID+"/queries", nil, &resp); err != nil {
+func (c *Client) GetInvestigationQueries(projectUUID, sessionUUID string) (*GetInvestigationQueriesResponse, error) {
+	// Queries are extracted from chain_of_thoughts in the inspect response.
+	inspectResp, err := c.SessionInspect(projectUUID, sessionUUID)
+	if err != nil {
 		return nil, err
 	}
-	return &resp, nil
+	var queries []QueryExecution
+	for _, pc := range inspectResp.PromptCycle {
+		for _, cot := range pc.ChainOfThoughts {
+			q := QueryExecution{
+				ID:     cot.ID,
+				Query:  cot.Description,
+				Status: cot.Status,
+			}
+			if len(cot.Sources) > 0 {
+				q.Source = cot.Sources[0]
+			}
+			queries = append(queries, q)
+		}
+	}
+	return &GetInvestigationQueriesResponse{Queries: queries}, nil
 }
 
 // --- Instructions ---
@@ -1173,63 +1205,69 @@ type InstructionSpec struct {
 	UpdateTime string `json:"update_time,omitempty"`
 }
 
-// ListInstructionsResponse holds the response from GET /v1/gendb/spec/{project}/instructions.
+// ListInstructionsResponse holds the response from GET /v1/instruction.
 type ListInstructionsResponse struct {
-	Response *GenDBResponse    `json:"response,omitempty"`
-	Specs    []InstructionSpec `json:"specs,omitempty"`
+	Response     *GenDBResponse    `json:"response,omitempty"`
+	Instructions []InstructionSpec `json:"instructions,omitempty"`
 }
 
 func (c *Client) ListInstructions(projectUUID string) (*ListInstructionsResponse, error) {
+	params := url.Values{}
+	params.Set("project_uuid", projectUUID)
 	var resp ListInstructionsResponse
-	if err := c.doJSON("GET", "/v1/gendb/spec/"+projectUUID+"/instructions", nil, &resp); err != nil {
+	if err := c.doJSON("GET", "/v1/instruction?"+params.Encode(), nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-// CreateInstructionRequest holds the body for POST /v1/gendb/spec/{project}/instructions.
+// CreateInstructionRequest holds the body for POST /v1/instruction.
 type CreateInstructionRequest struct {
-	Request *GenDBRequest `json:"request,omitempty"`
-	Name    string        `json:"name"`
-	Type    string        `json:"type"`
-	Content string        `json:"content"`
+	Instruction struct {
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	} `json:"instruction"`
+	ProjectUUID      string `json:"project_uuid,omitempty"`
+	OrganizationUUID string `json:"organization_uuid,omitempty"`
 }
 
 // CreateInstructionResponse holds the response from creating an instruction.
 type CreateInstructionResponse struct {
-	Response *GenDBResponse   `json:"response,omitempty"`
-	Spec     *InstructionSpec `json:"spec,omitempty"`
+	Response    *GenDBResponse   `json:"response,omitempty"`
+	Instruction *InstructionSpec `json:"instruction,omitempty"`
 }
 
 func (c *Client) CreateInstruction(projectUUID, name, instrType, content string) (*CreateInstructionResponse, error) {
 	reqBody := CreateInstructionRequest{
-		Request: &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
-		Name:    name,
-		Type:    instrType,
-		Content: content,
+		ProjectUUID:      projectUUID,
+		OrganizationUUID: c.orgUUID,
 	}
+	reqBody.Instruction.Name = name
+	reqBody.Instruction.Type = instrType
+	reqBody.Instruction.Content = content
 	var resp CreateInstructionResponse
-	if err := c.doJSON("POST", "/v1/gendb/spec/"+projectUUID+"/instructions", reqBody, &resp); err != nil {
+	if err := c.doJSON("POST", "/v1/instruction", reqBody, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-// UpdateInstructionStatusRequest holds the body for PATCH /v1/gendb/spec/instruction/{uuid}.
+// UpdateInstructionStatusRequest holds the body for PUT /v1/instruction/{uuid}.
 type UpdateInstructionStatusRequest struct {
-	Request *GenDBRequest `json:"request,omitempty"`
-	Enabled bool          `json:"enabled"`
+	Status string `json:"status"`
 }
 
 func (c *Client) UpdateInstructionStatus(instrUUID string, enabled bool) error {
-	reqBody := UpdateInstructionStatusRequest{
-		Request: &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
-		Enabled: enabled,
+	status := "INSTRUCTION_STATUS_DISABLED"
+	if enabled {
+		status = "INSTRUCTION_STATUS_ENABLED"
 	}
+	reqBody := UpdateInstructionStatusRequest{Status: status}
 	var resp struct {
 		Response *GenDBResponse `json:"response,omitempty"`
 	}
-	if err := c.doJSON("PATCH", "/v1/gendb/spec/instruction/"+instrUUID, reqBody, &resp); err != nil {
+	if err := c.doJSON("PUT", "/v1/instruction/"+instrUUID, reqBody, &resp); err != nil {
 		return err
 	}
 	if resp.Response != nil && resp.Response.ErrorCode != 0 {
@@ -1242,7 +1280,7 @@ func (c *Client) DeleteInstruction(instrUUID string) error {
 	var resp struct {
 		Response *GenDBResponse `json:"response,omitempty"`
 	}
-	if err := c.doJSON("DELETE", "/v1/gendb/spec/instruction/"+instrUUID, nil, &resp); err != nil {
+	if err := c.doJSON("DELETE", "/v1/instruction/"+instrUUID, nil, &resp); err != nil {
 		return err
 	}
 	if resp.Response != nil && resp.Response.ErrorCode != 0 {
@@ -1251,28 +1289,26 @@ func (c *Client) DeleteInstruction(instrUUID string) error {
 	return nil
 }
 
-// ValidateInstructionRequest holds the body for POST /v1/inference/instruction:validate.
+// ValidateInstructionRequest holds the body for POST /v1/instruction/validate.
 type ValidateInstructionRequest struct {
-	Request *GenDBRequest `json:"request,omitempty"`
-	Type    string        `json:"type"`
-	Content string        `json:"content"`
+	Instruction struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	} `json:"instruction"`
 }
 
 // ValidateInstructionResponse holds validation results.
 type ValidateInstructionResponse struct {
-	Valid   bool     `json:"valid"`
-	Errors  []string `json:"errors,omitempty"`
-	Message string   `json:"message,omitempty"`
+	Response    *GenDBResponse   `json:"response,omitempty"`
+	Instruction *InstructionSpec `json:"instruction,omitempty"`
 }
 
 func (c *Client) ValidateInstruction(instrType, content string) (*ValidateInstructionResponse, error) {
-	reqBody := ValidateInstructionRequest{
-		Request: &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
-		Type:    instrType,
-		Content: content,
-	}
+	var reqBody ValidateInstructionRequest
+	reqBody.Instruction.Type = instrType
+	reqBody.Instruction.Content = content
 	var resp ValidateInstructionResponse
-	if err := c.doJSON("POST", "/v1/inference/instruction:validate", reqBody, &resp); err != nil {
+	if err := c.doJSON("POST", "/v1/instruction/validate", reqBody, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

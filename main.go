@@ -1296,8 +1296,11 @@ func cmdReport() error {
 	if len(report.IncidentTypes) > 0 {
 		fmt.Printf("\n  %s📋 By Incident Type%s\n", display.Cyan, display.Reset)
 		for _, it := range report.IncidentTypes {
-			fmt.Printf("    %s%-20s%s  count: %-5d  saved: %-10s  noise: %s\n",
-				display.Bold, it.Type, display.Reset, it.Count, it.AvgTimeSaved, it.NoiseReduction)
+			fmt.Printf("    %s%s%s\n", display.Bold, it.Type, display.Reset)
+			for _, pr := range it.Priorities {
+				fmt.Printf("      [%s]  incidents: %-5d  investigated: %-3d  grouped: %-6s  saved: %s\n",
+					pr.Priority, pr.TotalIncidents, pr.Investigated, pr.PercentGrouped, pr.AvgTimeSaved)
+			}
 		}
 	}
 
@@ -1779,41 +1782,31 @@ func cmdSessionReport(args []string) error {
 
 	client := api.NewClient(cfg)
 
-	for _, sessionUUID := range args {
-		resp, err := client.GetSessionReport(sessionUUID)
-		if err != nil {
-			return fmt.Errorf("getting session report for %s: %w", sessionUUID, err)
-		}
-
-		if jsonOutput {
-			return printJSON(resp)
-		}
-
-		report := service.FormatSessionReport(resp)
-
-		display.Header(fmt.Sprintf("Session Report: %s", sessionUUID))
-
-		if report.Summary != "" {
-			fmt.Printf("  %sSummary:%s %s\n", display.Dim, display.Reset, report.Summary)
-		}
-
-		if report.TimeSaved != nil {
-			fmt.Printf("\n  %s⏱  Time Saved:%s\n", display.Blue, display.Reset)
-			fmt.Printf("    Standard investigation: %.0f min\n", report.TimeSaved.StandardInvestigationMin)
-			fmt.Printf("    Hawkeye investigation:  %.0f min\n", report.TimeSaved.HawkeyeInvestigationMin)
-			fmt.Printf("    %sTime saved:%s            %.0f min\n",
-				display.Bold, display.Reset, report.TimeSaved.TimeSavedMinutes)
-		}
-
-		if report.HasScores {
-			fmt.Printf("\n  %s📊 Scores:%s\n", display.Cyan, display.Reset)
-			fmt.Printf("    Accuracy:     %.1f/100\n", report.Accuracy)
-			fmt.Printf("    Completeness: %.1f/100\n", report.Completeness)
-		}
-
-		fmt.Println()
+	items, err := client.GetSessionReport(cfg.ProjectID, args)
+	if err != nil {
+		return fmt.Errorf("getting session report: %w", err)
 	}
 
+	if jsonOutput {
+		return printJSON(items)
+	}
+
+	display.Header(fmt.Sprintf("Session Reports (%d)", len(items)))
+
+	for _, item := range items {
+		fmt.Printf("\n  %s%s%s\n", display.Bold, item.Prompt, display.Reset)
+		if item.Summary != "" {
+			fmt.Printf("  %sSummary:%s %s\n", display.Dim, display.Reset, truncate(item.Summary, 120))
+		}
+		if item.TimeSaved > 0 {
+			fmt.Printf("  %sTime saved:%s %d min\n", display.Blue+display.Bold, display.Reset, item.TimeSaved/60)
+		}
+		if item.SessionLink != "" {
+			fmt.Printf("  %sLink:%s %s\n", display.Dim, display.Reset, item.SessionLink)
+		}
+	}
+
+	fmt.Println()
 	return nil
 }
 
@@ -1895,7 +1888,7 @@ func cmdQueries(args []string) error {
 	}
 
 	client := api.NewClient(cfg)
-	resp, err := client.GetInvestigationQueries(sessionUUID)
+	resp, err := client.GetInvestigationQueries(cfg.ProjectID, sessionUUID)
 	if err != nil {
 		return fmt.Errorf("getting queries: %w", err)
 	}
@@ -1988,10 +1981,10 @@ func cmdInstructions(args []string) error {
 	}
 
 	if jsonOutput {
-		return printJSON(resp.Specs)
+		return printJSON(resp.Instructions)
 	}
 
-	instructions := service.FormatInstructions(resp.Specs)
+	instructions := service.FormatInstructions(resp.Instructions)
 	display.Header(fmt.Sprintf("Instructions (%d)", len(instructions)))
 
 	if len(instructions) == 0 {
@@ -2024,7 +2017,7 @@ func cmdInstructionInfo(cfg *config.Config, instrUUID string) error {
 		return fmt.Errorf("listing instructions: %w", err)
 	}
 
-	for _, s := range resp.Specs {
+	for _, s := range resp.Instructions {
 		if s.UUID == instrUUID {
 			if jsonOutput {
 				return printJSON(s)
@@ -2097,11 +2090,11 @@ func cmdInstructionCreate(cfg *config.Config, args []string) error {
 	}
 
 	if jsonOutput {
-		return printJSON(resp.Spec)
+		return printJSON(resp.Instruction)
 	}
 
-	if resp.Spec != nil {
-		display.Success(fmt.Sprintf("Instruction created: %s (%s)", resp.Spec.Name, resp.Spec.UUID))
+	if resp.Instruction != nil {
+		display.Success(fmt.Sprintf("Instruction created: %s (%s)", resp.Instruction.Name, resp.Instruction.UUID))
 	} else {
 		display.Success("Instruction created")
 	}
@@ -2200,16 +2193,13 @@ func cmdInstructionValidate(cfg *config.Config, args []string) error {
 		return printJSON(resp)
 	}
 
-	if resp.Valid {
+	if resp.Instruction != nil {
 		display.Success("Instruction content is valid")
+		display.Info("Name:", resp.Instruction.Name)
+		display.Info("Type:", resp.Instruction.Type)
+		display.Info("Content:", resp.Instruction.Content)
 	} else {
-		display.Error("Instruction content is invalid")
-		if resp.Message != "" {
-			display.Info("Message:", resp.Message)
-		}
-		for _, e := range resp.Errors {
-			fmt.Printf("  • %s\n", e)
-		}
+		display.Error("Instruction validation failed")
 	}
 	return nil
 }

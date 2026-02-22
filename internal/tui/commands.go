@@ -1110,8 +1110,11 @@ func (m model) handleReportResult(msg reportResultMsg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tea.Println(""))
 		cmds = append(cmds, tea.Println(dimStyle.Render("    By type:")))
 		for _, it := range r.IncidentTypes {
-			cmds = append(cmds, tea.Println(fmt.Sprintf("      %-16s  count: %-5d  saved: %-10s  noise: %s",
-				it.Type, it.Count, it.AvgTimeSaved, it.NoiseReduction)))
+			cmds = append(cmds, tea.Println(fmt.Sprintf("      %s", it.Type)))
+			for _, pr := range it.Priorities {
+				cmds = append(cmds, tea.Println(fmt.Sprintf("        [%s]  incidents: %-5d  investigated: %-3d  grouped: %-6s  saved: %s",
+					pr.Priority, pr.TotalIncidents, pr.Investigated, pr.PercentGrouped, pr.AvgTimeSaved)))
+			}
 		}
 	}
 
@@ -1398,7 +1401,7 @@ func (m model) cmdInstructions(args []string) (tea.Model, tea.Cmd) {
 			if err != nil {
 				return instructionsLoadedMsg{err: err}
 			}
-			return instructionsLoadedMsg{instructions: service.FormatInstructions(resp.Specs)}
+			return instructionsLoadedMsg{instructions: service.FormatInstructions(resp.Instructions)}
 		},
 	)
 }
@@ -1449,7 +1452,7 @@ func (m model) cmdInstructionCreate(args []string) (tea.Model, tea.Cmd) {
 			if err != nil {
 				return instructionCreateMsg{err: err}
 			}
-			return instructionCreateMsg{spec: resp.Spec}
+			return instructionCreateMsg{spec: resp.Instruction}
 		},
 	)
 }
@@ -1641,7 +1644,7 @@ func (m model) cmdQueries(args []string) (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(
 		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading queries for %s...", truncateUUID(sessionUUID)))),
 		func() tea.Msg {
-			resp, err := client.GetInvestigationQueries(sessionUUID)
+			resp, err := client.GetInvestigationQueries(m.cfg.ProjectID, sessionUUID)
 			if err != nil {
 				return queriesResultMsg{err: err}
 			}
@@ -1734,8 +1737,8 @@ func (m model) handleDiscoverResult(msg discoverResultMsg) (tea.Model, tea.Cmd) 
 // ─── /session-report ────────────────────────────────────────────────────────
 
 type sessionReportMsg struct {
-	report service.SessionReportDisplay
-	err    error
+	items []api.SessionReportItem
+	err   error
 }
 
 func (m model) cmdSessionReport(args []string) (tea.Model, tea.Cmd) {
@@ -1753,15 +1756,16 @@ func (m model) cmdSessionReport(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	client := m.client
+	projectUUID := m.cfg.ProjectID
 
 	return m, tea.Sequence(
 		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading report for %s...", truncateUUID(sessionUUID)))),
 		func() tea.Msg {
-			resp, err := client.GetSessionReport(sessionUUID)
+			items, err := client.GetSessionReport(projectUUID, []string{sessionUUID})
 			if err != nil {
 				return sessionReportMsg{err: err}
 			}
-			return sessionReportMsg{report: service.FormatSessionReport(resp)}
+			return sessionReportMsg{items: items}
 		},
 	)
 }
@@ -1771,23 +1775,20 @@ func (m model) handleSessionReport(msg sessionReportMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Report failed: %v", msg.err)))
 	}
 
-	r := msg.report
 	var cmds []tea.Cmd
 	cmds = append(cmds, tea.Println(""), tea.Println(dimStyle.Render("  Session Report:")))
 
-	if r.Summary != "" {
-		cmds = append(cmds, tea.Println(dimStyle.Render("    Summary: "+r.Summary)))
+	for _, item := range msg.items {
+		if item.Summary != "" {
+			cmds = append(cmds, tea.Println(dimStyle.Render("    Summary: "+item.Summary)))
+		}
+		if item.TimeSaved > 0 {
+			cmds = append(cmds, tea.Println(fmt.Sprintf("    ⏱  Time saved: %d min", item.TimeSaved/60)))
+		}
 	}
 
-	if r.TimeSaved != nil {
-		cmds = append(cmds, tea.Println(fmt.Sprintf("    ⏱  Time saved: %.0f min (%.0f → %.0f)",
-			r.TimeSaved.TimeSavedMinutes,
-			r.TimeSaved.StandardInvestigationMin,
-			r.TimeSaved.HawkeyeInvestigationMin)))
-	}
-
-	if r.HasScores {
-		cmds = append(cmds, tea.Println(fmt.Sprintf("    📊 Accuracy: %.1f/100  Completeness: %.1f/100", r.Accuracy, r.Completeness)))
+	if len(msg.items) == 0 {
+		cmds = append(cmds, tea.Println(dimStyle.Render("    No report data available.")))
 	}
 
 	cmds = append(cmds, tea.Println(""))

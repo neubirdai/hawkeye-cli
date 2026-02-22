@@ -20,10 +20,17 @@ type ReportDisplay struct {
 
 // IncidentTypeDisplay holds a single incident type's report data.
 type IncidentTypeDisplay struct {
-	Type           string
-	Count          int
+	Type       string
+	Priorities []PriorityDisplay
+}
+
+// PriorityDisplay holds display-ready priority breakdown data.
+type PriorityDisplay struct {
+	Priority       string
+	TotalIncidents int
+	Investigated   int
+	PercentGrouped string
 	AvgTimeSaved   string
-	NoiseReduction string
 }
 
 // FormatReport transforms raw analytics into a display-ready struct.
@@ -35,7 +42,7 @@ func FormatReport(resp *api.IncidentReportResponse) ReportDisplay {
 	display := ReportDisplay{
 		AvgTimeSavedMinutes: fmt.Sprintf("%.1f min", resp.AvgTimeSavedMinutes),
 		AvgMTTR:             fmt.Sprintf("%.1f min", resp.AvgMTTR),
-		NoiseReduction:      fmt.Sprintf("%.1f%%", resp.NoiseReduction*100),
+		NoiseReduction:      fmt.Sprintf("%.1f%%", resp.NoiseReduction),
 		TotalIncidents:      resp.TotalIncidents,
 		TotalInvestigations: resp.TotalInvestigations,
 		TotalTimeSavedHours: fmt.Sprintf("%.1f hrs", resp.TotalTimeSavedHours),
@@ -46,50 +53,17 @@ func FormatReport(resp *api.IncidentReportResponse) ReportDisplay {
 	}
 
 	for _, itr := range resp.IncidentTypeReports {
-		display.IncidentTypes = append(display.IncidentTypes, IncidentTypeDisplay{
-			Type:           itr.Type,
-			Count:          itr.Count,
-			AvgTimeSaved:   fmt.Sprintf("%.1f min", itr.AvgTimeSavedMinutes),
-			NoiseReduction: fmt.Sprintf("%.1f%%", itr.NoiseReduction*100),
-		})
-	}
-
-	return display
-}
-
-// SessionReportDisplay holds display-ready per-session report data.
-type SessionReportDisplay struct {
-	SessionID    string
-	Summary      string
-	TimeSaved    *TimeSavedDisplay
-	HasScores    bool
-	Accuracy     float64
-	Completeness float64
-}
-
-// FormatSessionReport transforms raw session report into a display-ready struct.
-func FormatSessionReport(resp *api.SessionReportResponse) SessionReportDisplay {
-	if resp == nil {
-		return SessionReportDisplay{}
-	}
-
-	display := SessionReportDisplay{
-		SessionID: resp.SessionID,
-		Summary:   resp.Summary,
-	}
-
-	if resp.TimeSaved != nil {
-		display.TimeSaved = &TimeSavedDisplay{
-			TimeSavedMinutes:         resp.TimeSaved.TimeSavedMinutes,
-			StandardInvestigationMin: resp.TimeSaved.StandardInvestigationMin,
-			HawkeyeInvestigationMin:  resp.TimeSaved.HawkeyeInvestigationMin,
+		itd := IncidentTypeDisplay{Type: itr.Type}
+		for _, pr := range itr.PriorityReports {
+			itd.Priorities = append(itd.Priorities, PriorityDisplay{
+				Priority:       pr.Priority,
+				TotalIncidents: pr.TotalIncidents,
+				Investigated:   pr.InvestigatedIncidents,
+				PercentGrouped: fmt.Sprintf("%.1f%%", pr.PercentGrouped),
+				AvgTimeSaved:   fmt.Sprintf("%.1f min", pr.AvgTimeSavedMinutes),
+			})
 		}
-	}
-
-	if resp.Score != nil {
-		display.HasScores = true
-		display.Accuracy = resp.Score.Accuracy.Score
-		display.Completeness = resp.Score.Completeness.Score
+		display.IncidentTypes = append(display.IncidentTypes, itd)
 	}
 
 	return display

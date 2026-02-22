@@ -2,6 +2,7 @@ package service
 
 import (
 	"hawkeye-cli/internal/api"
+	"strings"
 )
 
 // ConnectionDisplay holds display-ready connection info.
@@ -20,6 +21,11 @@ type ResourceDisplay struct {
 	TelemetryType  string
 }
 
+// cleanConnType strips the CONNECTION_TYPE_ prefix and lowercases for display.
+func cleanConnType(t string) string {
+	return strings.ToLower(strings.TrimPrefix(t, "CONNECTION_TYPE_"))
+}
+
 // FormatConnection maps a raw ConnectionSpec to a display-ready struct.
 func FormatConnection(c api.ConnectionSpec) ConnectionDisplay {
 	name := c.Name
@@ -30,7 +36,7 @@ func FormatConnection(c api.ConnectionSpec) ConnectionDisplay {
 	return ConnectionDisplay{
 		UUID:          c.UUID,
 		Name:          name,
-		Type:          c.Type,
+		Type:          cleanConnType(c.Type),
 		SyncState:     c.SyncState,
 		TrainingState: c.TrainingState,
 	}
@@ -59,7 +65,7 @@ func FormatConnectionDetail(c *api.ConnectionDetail) ConnectionDetailDisplay {
 	return ConnectionDetailDisplay{
 		UUID:          c.UUID,
 		Name:          name,
-		Type:          c.Type,
+		Type:          cleanConnType(c.Type),
 		SyncState:     c.SyncState,
 		TrainingState: c.TrainingState,
 		CreateTime:    c.CreateTime,

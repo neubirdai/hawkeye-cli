@@ -483,14 +483,14 @@ func TestGetIncidentReport(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{
 			"avg_investigation_time_saved_minutes": 15.5,
 			"avg_mttr": 30.2,
-			"noise_reduction": 0.45,
+			"noise_reduction": 45.0,
 			"total_incidents": 100,
 			"total_investigations": 150,
 			"total_investigation_time_saved_hours": 38.75,
 			"start_time": "2025-01-01",
 			"end_time": "2025-06-30",
 			"incident_type_reports": [
-				{"type":"alert","count":50,"avg_investigation_time_saved_minutes":10.0,"noise_reduction":0.3}
+				{"incident_type":"alert","priority_reports":[{"priority":"0","total_incidents":50,"avg_time_saved_minutes":10.0}]}
 			]
 		}`)
 	}))
@@ -732,11 +732,11 @@ func TestGetConnectionInfo(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("method = %s, want GET", r.Method)
 		}
-		if !strings.HasSuffix(r.URL.Path, "/v1/datasource/connection/conn-1") {
-			t.Errorf("path = %s, want suffix /v1/datasource/connection/conn-1", r.URL.Path)
+		if !strings.HasSuffix(r.URL.Path, "/v1/connection/conn-1") {
+			t.Errorf("path = %s, want suffix /v1/connection/conn-1", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"conn-1","name":"Datadog Prod","type":"datadog","sync_state":"SYNCED","training_state":"TRAINED"}}`)
+		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"conn-1","name":"Datadog Prod","connection_type":"datadog","sync_state":"SYNCED","training_state":"TRAINED"}}`)
 	}))
 	defer srv.Close()
 
@@ -886,11 +886,14 @@ func TestListProjectConnections(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("method = %s, want GET", r.Method)
 		}
-		if !strings.Contains(r.URL.Path, "/v1/gendb/spec/proj-1/datasource-connections") {
-			t.Errorf("path = %s", r.URL.Path)
+		if !strings.HasSuffix(r.URL.Path, "/v1/connection") {
+			t.Errorf("path = %s, want suffix /v1/connection", r.URL.Path)
+		}
+		if r.URL.Query().Get("project_uuid") != "proj-1" {
+			t.Errorf("project_uuid = %q, want %q", r.URL.Query().Get("project_uuid"), "proj-1")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","type":"datadog"},{"uuid":"c2","name":"AWS","type":"aws"}]}`)
+		_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","connection_type":"datadog"},{"uuid":"c2","name":"AWS","connection_type":"aws"}]}`)
 	}))
 	defer srv.Close()
 
@@ -914,11 +917,14 @@ func TestListInstructions(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("method = %s, want GET", r.Method)
 		}
-		if !strings.Contains(r.URL.Path, "/v1/gendb/spec/proj-1/instructions") {
-			t.Errorf("path = %s", r.URL.Path)
+		if r.URL.Path != "/v1/instruction" {
+			t.Errorf("path = %s, want /v1/instruction", r.URL.Path)
+		}
+		if r.URL.Query().Get("project_uuid") != "proj-1" {
+			t.Errorf("project_uuid = %q, want proj-1", r.URL.Query().Get("project_uuid"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"i1","name":"Filter noise","type":"filter","content":"ignore 404s","enabled":true}]}`)
+		_, _ = fmt.Fprint(w, `{"instructions":[{"uuid":"i1","name":"Filter noise","type":"filter","content":"ignore 404s","enabled":true}]}`)
 	}))
 	defer srv.Close()
 
@@ -927,13 +933,13 @@ func TestListInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListInstructions() error = %v", err)
 	}
-	if len(resp.Specs) != 1 {
-		t.Fatalf("got %d specs, want 1", len(resp.Specs))
+	if len(resp.Instructions) != 1 {
+		t.Fatalf("got %d instructions, want 1", len(resp.Instructions))
 	}
-	if resp.Specs[0].Name != "Filter noise" {
-		t.Errorf("Name = %q, want %q", resp.Specs[0].Name, "Filter noise")
+	if resp.Instructions[0].Name != "Filter noise" {
+		t.Errorf("Name = %q, want %q", resp.Instructions[0].Name, "Filter noise")
 	}
-	if !resp.Specs[0].Enabled {
+	if !resp.Instructions[0].Enabled {
 		t.Error("Enabled = false, want true")
 	}
 }
@@ -943,25 +949,25 @@ func TestCreateInstruction(t *testing.T) {
 		if r.Method != "POST" {
 			t.Errorf("method = %s, want POST", r.Method)
 		}
-		if !strings.Contains(r.URL.Path, "/v1/gendb/spec/proj-1/instructions") {
-			t.Errorf("path = %s", r.URL.Path)
+		if r.URL.Path != "/v1/instruction" {
+			t.Errorf("path = %s, want /v1/instruction", r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var req CreateInstructionRequest
 		if err := json.Unmarshal(body, &req); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if req.Name != "My rule" {
-			t.Errorf("Name = %q, want %q", req.Name, "My rule")
+		if req.Instruction.Name != "My rule" {
+			t.Errorf("Instruction.Name = %q, want %q", req.Instruction.Name, "My rule")
 		}
-		if req.Type != "filter" {
-			t.Errorf("Type = %q, want %q", req.Type, "filter")
+		if req.Instruction.Type != "filter" {
+			t.Errorf("Instruction.Type = %q, want %q", req.Instruction.Type, "filter")
 		}
-		if req.Content != "ignore 404s" {
-			t.Errorf("Content = %q, want %q", req.Content, "ignore 404s")
+		if req.Instruction.Content != "ignore 404s" {
+			t.Errorf("Instruction.Content = %q, want %q", req.Instruction.Content, "ignore 404s")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"new-instr","name":"My rule","type":"filter","content":"ignore 404s","enabled":true}}`)
+		_, _ = fmt.Fprint(w, `{"instruction":{"uuid":"new-instr","name":"My rule","type":"filter","content":"ignore 404s","enabled":true}}`)
 	}))
 	defer srv.Close()
 
@@ -970,18 +976,18 @@ func TestCreateInstruction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInstruction() error = %v", err)
 	}
-	if resp.Spec.UUID != "new-instr" {
-		t.Errorf("UUID = %q, want %q", resp.Spec.UUID, "new-instr")
+	if resp.Instruction.UUID != "new-instr" {
+		t.Errorf("UUID = %q, want %q", resp.Instruction.UUID, "new-instr")
 	}
 }
 
 func TestUpdateInstructionStatus(t *testing.T) {
 	t.Run("enable", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != "PATCH" {
-				t.Errorf("method = %s, want PATCH", r.Method)
+			if r.Method != "PUT" {
+				t.Errorf("method = %s, want PUT", r.Method)
 			}
-			if !strings.HasSuffix(r.URL.Path, "/v1/gendb/spec/instruction/instr-1") {
+			if !strings.HasSuffix(r.URL.Path, "/v1/instruction/instr-1") {
 				t.Errorf("path = %s", r.URL.Path)
 			}
 			body, _ := io.ReadAll(r.Body)
@@ -989,8 +995,8 @@ func TestUpdateInstructionStatus(t *testing.T) {
 			if err := json.Unmarshal(body, &req); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if !req.Enabled {
-				t.Error("Enabled = false, want true")
+			if req.Status != "INSTRUCTION_STATUS_ENABLED" {
+				t.Errorf("Status = %q, want INSTRUCTION_STATUS_ENABLED", req.Status)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{}`)
@@ -1026,7 +1032,7 @@ func TestDeleteInstruction(t *testing.T) {
 		if r.Method != "DELETE" {
 			t.Errorf("method = %s, want DELETE", r.Method)
 		}
-		if !strings.HasSuffix(r.URL.Path, "/v1/gendb/spec/instruction/instr-1") {
+		if !strings.HasSuffix(r.URL.Path, "/v1/instruction/instr-1") {
 			t.Errorf("path = %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1045,19 +1051,19 @@ func TestValidateInstruction(t *testing.T) {
 		if r.Method != "POST" {
 			t.Errorf("method = %s, want POST", r.Method)
 		}
-		if r.URL.Path != "/v1/inference/instruction:validate" {
-			t.Errorf("path = %s, want /v1/inference/instruction:validate", r.URL.Path)
+		if r.URL.Path != "/v1/instruction/validate" {
+			t.Errorf("path = %s, want /v1/instruction/validate", r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var req ValidateInstructionRequest
 		if err := json.Unmarshal(body, &req); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if req.Type != "filter" {
-			t.Errorf("Type = %q, want %q", req.Type, "filter")
+		if req.Instruction.Type != "filter" {
+			t.Errorf("Instruction.Type = %q, want %q", req.Instruction.Type, "filter")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"valid":true,"message":"looks good"}`)
+		_, _ = fmt.Fprint(w, `{"instruction":{"name":"test-rule","type":"filter","content":"test content"}}`)
 	}))
 	defer srv.Close()
 
@@ -1066,11 +1072,11 @@ func TestValidateInstruction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateInstruction() error = %v", err)
 	}
-	if !resp.Valid {
-		t.Error("Valid = false, want true")
+	if resp.Instruction == nil {
+		t.Fatal("Instruction is nil, want non-nil")
 	}
-	if resp.Message != "looks good" {
-		t.Errorf("Message = %q, want %q", resp.Message, "looks good")
+	if resp.Instruction.Name != "test-rule" {
+		t.Errorf("Name = %q, want %q", resp.Instruction.Name, "test-rule")
 	}
 }
 
@@ -1164,40 +1170,35 @@ func TestCreateSessionFromAlert(t *testing.T) {
 }
 
 func TestGetInvestigationQueries(t *testing.T) {
+	// GetInvestigationQueries now internally calls SessionInspect and extracts queries from chain_of_thoughts.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
-			t.Errorf("method = %s, want GET", r.Method)
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
 		}
-		if !strings.Contains(r.URL.Path, "/v1/inference/session/sess-1/queries") {
-			t.Errorf("path = %s", r.URL.Path)
+		if r.URL.Path != "/v1/inference/session/inspect" {
+			t.Errorf("path = %s, want /v1/inference/session/inspect", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"queries":[
-			{"id":"q1","query":"SELECT * FROM logs","source":"postgres","status":"SUCCESS","result_count":42},
-			{"id":"q2","query":"metric:cpu.usage","source":"datadog","status":"FAILED","error_message":"timeout"}
-		]}`)
+		_, _ = fmt.Fprint(w, `{"prompt_cycle":[{"chain_of_thoughts":[
+			{"id":"q1","description":"Check error logs","status":"done","sources_involved":["log_source"]},
+			{"id":"q2","description":"Check metrics","status":"done","sources_involved":[]}
+		]}]}`)
 	}))
 	defer srv.Close()
 
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
-	resp, err := c.GetInvestigationQueries("sess-1")
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.GetInvestigationQueries("proj-1", "sess-1")
 	if err != nil {
 		t.Fatalf("GetInvestigationQueries() error = %v", err)
 	}
 	if len(resp.Queries) != 2 {
 		t.Fatalf("got %d queries, want 2", len(resp.Queries))
 	}
-	if resp.Queries[0].Source != "postgres" {
-		t.Errorf("Queries[0].Source = %q, want %q", resp.Queries[0].Source, "postgres")
+	if resp.Queries[0].Query != "Check error logs" {
+		t.Errorf("Queries[0].Query = %q, want %q", resp.Queries[0].Query, "Check error logs")
 	}
-	if resp.Queries[0].ResultCount != 42 {
-		t.Errorf("Queries[0].ResultCount = %d, want 42", resp.Queries[0].ResultCount)
-	}
-	if resp.Queries[1].Status != "FAILED" {
-		t.Errorf("Queries[1].Status = %q, want %q", resp.Queries[1].Status, "FAILED")
-	}
-	if resp.Queries[1].ErrorMessage != "timeout" {
-		t.Errorf("Queries[1].ErrorMessage = %q, want %q", resp.Queries[1].ErrorMessage, "timeout")
+	if resp.Queries[0].Source != "log_source" {
+		t.Errorf("Queries[0].Source = %q, want %q", resp.Queries[0].Source, "log_source")
 	}
 }
 
@@ -1209,8 +1210,8 @@ func TestDiscoverProjectResources(t *testing.T) {
 		callCount++
 		w.Header().Set("Content-Type", "application/json")
 		// First call: ListProjectConnections
-		if strings.Contains(r.URL.Path, "/datasource-connections") {
-			_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","type":"datadog"},{"uuid":"c2","name":"AWS","type":"aws"}]}`)
+		if r.URL.Path == "/v1/connection" && r.URL.Query().Get("project_uuid") != "" {
+			_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","connection_type":"datadog"},{"uuid":"c2","name":"AWS","connection_type":"aws"}]}`)
 			return
 		}
 		// Subsequent calls: ListConnectionResources for each connection
@@ -1252,8 +1253,8 @@ func TestDiscoverProjectResources(t *testing.T) {
 func TestDiscoverProjectResourcesFilterByConnectionType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(r.URL.Path, "/datasource-connections") {
-			_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","type":"datadog"},{"uuid":"c2","name":"AWS","type":"aws"}]}`)
+		if r.URL.Path == "/v1/connection" && r.URL.Query().Get("project_uuid") != "" {
+			_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","connection_type":"datadog"},{"uuid":"c2","name":"AWS","connection_type":"aws"}]}`)
 			return
 		}
 		if strings.Contains(r.URL.Path, "/v1/resource") {
@@ -1287,41 +1288,30 @@ func TestGetSessionReport(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("method = %s, want GET", r.Method)
 		}
-		if !strings.Contains(r.URL.Path, "/v1/inference/session/sess-1/report") {
-			t.Errorf("path = %s", r.URL.Path)
+		if r.URL.Path != "/v1/inference/session_report" {
+			t.Errorf("path = %s, want /v1/inference/session_report", r.URL.Path)
+		}
+		if r.URL.Query().Get("project_uuid") != "proj-1" {
+			t.Errorf("project_uuid = %q", r.URL.Query().Get("project_uuid"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{
-			"session_id":"sess-1",
-			"summary":"Root cause: memory leak",
-			"time_saved":{"time_saved_minutes":25,"standard_investigation_time_minutes":30,"hawkeye_investigation_time_minutes":5},
-			"score":{"accuracy":{"score":0.95},"completeness":{"score":0.88},"qualitative":{},"scored_by":"auto"}
-		}`)
+		_, _ = fmt.Fprint(w, `[{"summary":"Root cause: memory leak","time_saved":1500,"session_link":"https://example.com/sess-1"}]`)
 	}))
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
-	resp, err := c.GetSessionReport("sess-1")
+	items, err := c.GetSessionReport("proj-1", []string{"sess-1"})
 	if err != nil {
 		t.Fatalf("GetSessionReport() error = %v", err)
 	}
-	if resp.SessionID != "sess-1" {
-		t.Errorf("SessionID = %q, want %q", resp.SessionID, "sess-1")
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
 	}
-	if resp.Summary != "Root cause: memory leak" {
-		t.Errorf("Summary = %q", resp.Summary)
+	if items[0].Summary != "Root cause: memory leak" {
+		t.Errorf("Summary = %q", items[0].Summary)
 	}
-	if resp.TimeSaved == nil {
-		t.Fatal("TimeSaved is nil")
-	}
-	if resp.TimeSaved.TimeSavedMinutes != 25 {
-		t.Errorf("TimeSavedMinutes = %v, want 25", resp.TimeSaved.TimeSavedMinutes)
-	}
-	if resp.Score == nil {
-		t.Fatal("Score is nil")
-	}
-	if resp.Score.Accuracy.Score != 0.95 {
-		t.Errorf("Accuracy = %v, want 0.95", resp.Score.Accuracy.Score)
+	if items[0].TimeSaved != 1500 {
+		t.Errorf("TimeSaved = %d, want 1500", items[0].TimeSaved)
 	}
 }
 

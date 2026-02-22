@@ -208,7 +208,7 @@ func (m *mockAPI) CreateInstruction(projectUUID, name, instrType, content string
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &api.CreateInstructionResponse{Spec: &api.InstructionSpec{UUID: "new-instr-uuid", Name: name}}, nil
+	return &api.CreateInstructionResponse{Instruction: &api.InstructionSpec{UUID: "new-instr-uuid", Name: name}}, nil
 }
 
 func (m *mockAPI) UpdateInstructionStatus(instrUUID string, enabled bool) error {
@@ -223,7 +223,7 @@ func (m *mockAPI) ValidateInstruction(instrType, content string) (*api.ValidateI
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &api.ValidateInstructionResponse{Valid: true}, nil
+	return &api.ValidateInstructionResponse{Instruction: &api.InstructionSpec{Name: "validated"}}, nil
 }
 
 func (m *mockAPI) ApplySessionInstruction(sessionUUID, instrType, content string) error {
@@ -244,7 +244,7 @@ func (m *mockAPI) CreateSessionFromAlert(projectUUID, alertID string) (*api.NewS
 	return &api.NewSessionResponse{SessionUUID: "alert-session-uuid"}, nil
 }
 
-func (m *mockAPI) GetInvestigationQueries(sessionUUID string) (*api.GetInvestigationQueriesResponse, error) {
+func (m *mockAPI) GetInvestigationQueries(projectUUID, sessionUUID string) (*api.GetInvestigationQueriesResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -258,11 +258,11 @@ func (m *mockAPI) DiscoverProjectResources(projectUUID, telemetryType, connectio
 	return &api.DiscoverResourcesResponse{}, nil
 }
 
-func (m *mockAPI) GetSessionReport(sessionUUID string) (*api.SessionReportResponse, error) {
+func (m *mockAPI) GetSessionReport(projectUUID string, sessionUUIDs []string) ([]api.SessionReportItem, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &api.SessionReportResponse{}, nil
+	return nil, nil
 }
 
 // Verify mockAPI satisfies the interface at compile time.
@@ -1334,30 +1334,20 @@ func TestHandleSessionReport(t *testing.T) {
 		}
 	})
 
-	t.Run("with report", func(t *testing.T) {
+	t.Run("with report items", func(t *testing.T) {
 		m := newTestModel()
-		report := service.SessionReportDisplay{
-			SessionID: "s1",
-			Summary:   "Root cause found",
-			TimeSaved: &service.TimeSavedDisplay{
-				TimeSavedMinutes:         25.0,
-				StandardInvestigationMin: 30.0,
-				HawkeyeInvestigationMin:  5.0,
-			},
-			HasScores:    true,
-			Accuracy:     0.95,
-			Completeness: 0.88,
+		items := []api.SessionReportItem{
+			{Summary: "Root cause found", TimeSaved: 1500},
 		}
-		_, cmd := m.handleSessionReport(sessionReportMsg{report: report})
+		_, cmd := m.handleSessionReport(sessionReportMsg{items: items})
 		if cmd == nil {
 			t.Error("expected output cmd, got nil")
 		}
 	})
 
-	t.Run("minimal report", func(t *testing.T) {
+	t.Run("empty report", func(t *testing.T) {
 		m := newTestModel()
-		report := service.SessionReportDisplay{SessionID: "s1"}
-		_, cmd := m.handleSessionReport(sessionReportMsg{report: report})
+		_, cmd := m.handleSessionReport(sessionReportMsg{})
 		if cmd == nil {
 			t.Error("expected output cmd, got nil")
 		}
