@@ -17,3 +17,32 @@ func FilterSystemProjects(projects []api.ProjectSpec) []api.ProjectSpec {
 	}
 	return filtered
 }
+
+// ProjectDetailDisplay holds display-ready project detail info.
+type ProjectDetailDisplay struct {
+	UUID        string
+	Name        string
+	Description string
+	Ready       bool
+	CreateTime  string
+	UpdateTime  string
+}
+
+// FormatProjectDetail maps a raw ProjectDetail to a display-ready struct.
+func FormatProjectDetail(p *api.ProjectDetail) ProjectDetailDisplay {
+	if p == nil {
+		return ProjectDetailDisplay{}
+	}
+	name := p.Name
+	if name == "" {
+		name = "(unnamed)"
+	}
+	return ProjectDetailDisplay{
+		UUID:        p.UUID,
+		Name:        name,
+		Description: p.Description,
+		Ready:       p.Ready,
+		CreateTime:  p.CreateTime,
+		UpdateTime:  p.UpdateTime,
+	}
+}

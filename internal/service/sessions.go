@@ -78,6 +78,34 @@ func normalizeStatus(status string) string {
 	}
 }
 
+// QueryDisplay holds display-ready query execution info.
+type QueryDisplay struct {
+	ID            string
+	Query         string
+	Source        string
+	Status        string
+	ExecutionTime string
+	ResultCount   int
+	ErrorMessage  string
+}
+
+// FormatQueries maps raw QueryExecutions to display-ready structs.
+func FormatQueries(queries []api.QueryExecution) []QueryDisplay {
+	var result []QueryDisplay
+	for _, q := range queries {
+		result = append(result, QueryDisplay{
+			ID:            q.ID,
+			Query:         q.Query,
+			Source:        q.Source,
+			Status:        q.Status,
+			ExecutionTime: q.ExecutionTime,
+			ResultCount:   q.ResultCount,
+			ErrorMessage:  q.ErrorMessage,
+		})
+	}
+	return result
+}
+
 // FormatSessionRow maps a raw SessionInfo to a display-ready struct.
 func FormatSessionRow(s api.SessionInfo) SessionDisplay {
 	name := s.Name

@@ -190,20 +190,20 @@ func TestMatchCommands(t *testing.T) {
 		prefix  string
 		wantLen int
 	}{
-		{"/", topLevelCount},             // only top-level commands
-		{"/h", 1},                        // /help
-		{"/s", 5},                        // /score, /session, /sessions, /set, /summary
-		{"/q", 1},                        // /quit
-		{"/xyz", 0},                      // no match
-		{"/login", 1},                    // /login
-		{"/se", 3},                       // /session, /sessions, /set
-		{"/connections", 1},              // only /connections itself (no space yet)
-		{"/connections ", 2},             // subcommands: list, resources
-		{"/connections a", 0},            // no more add subcommands under connections
-		{"/connections list", 1},         // /connections list
-		{"/incidents", 1},               // only /incidents itself
-		{"/incidents ", 3},              // subcommands: add pagerduty, add firehydrant, add incidentio
-		{"/incidents a", 3},             // /incidents add pagerduty, add firehydrant, add incidentio
+		{"/", topLevelCount},
+		{"/h", 1},                // /help
+		{"/s", 6},                // /score, /session, /session-report, /sessions, /set, /summary
+		{"/q", 2},                // /queries, /quit
+		{"/xyz", 0},              // no match
+		{"/login", 1},            // /login
+		{"/se", 4},               // /session, /session-report, /sessions, /set
+		{"/connections", 1},      // only /connections itself (no space yet)
+		{"/connections ", 2},     // subcommands: list, resources
+		{"/connections a", 0},    // no subcommands under connections starting with a
+		{"/connections list", 1}, // /connections list
+		{"/incidents", 1},        // only /incidents itself
+		{"/incidents ", 3},       // subcommands: add pagerduty, add firehydrant, add incidentio
+		{"/incidents a", 3},      // /incidents add pagerduty, add firehydrant, add incidentio
 	}
 
 	for _, tt := range tests {

@@ -38,6 +38,7 @@ var slashCommands = []slashCmd{
 	{"/connections", "Manage data source connections"},
 	{"/connections list", "List data source connections"},
 	{"/connections resources", "List resources for a connection"},
+	{"/discover", "Discover project resources"},
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
 	{"/incidents", "Add incident tool connections"},
@@ -45,14 +46,19 @@ var slashCommands = []slashCmd{
 	{"/incidents add firehydrant", "Add a FireHydrant connection (--name, --api-key)"},
 	{"/incidents add incidentio", "Add an incident.io connection (--name, --api-key)"},
 	{"/inspect", "View session details"},
+	{"/instructions", "Manage project instructions"},
+	{"/investigate-alert", "Investigate an alert"},
 	{"/link", "Get web UI URL for session"},
 	{"/login", "Login to a Hawkeye server"},
-	{"/projects", "List available projects"},
+	{"/projects", "List/manage projects"},
 	{"/prompts", "Browse investigation prompts"},
+	{"/queries", "Show investigation queries"},
 	{"/quit", "Exit Hawkeye"},
 	{"/report", "Show incident analytics"},
+	{"/rerun", "Rerun an investigation"},
 	{"/score", "Show RCA quality scores"},
 	{"/session", "Set active session"},
+	{"/session-report", "Per-session report"},
 	{"/sessions", "List recent sessions"},
 	{"/set", "Set project or config"},
 	{"/summary", "Get session summary"},
@@ -402,6 +408,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resourcesResultMsg:
 		return m.handleResourcesResult(msg)
+
+	case projectInfoMsg:
+		return m.handleProjectInfo(msg)
+
+	case projectCreateMsg:
+		return m.handleProjectCreate(msg)
+
+	case projectDeleteMsg:
+		return m.handleProjectDelete(msg)
+
+	case connInfoMsg:
+		return m.handleConnInfo(msg)
+
+	case connAddMsg:
+		return m.handleConnAdd(msg)
+
+	case connRemoveMsg:
+		return m.handleConnRemove(msg)
+
+	case instructionsLoadedMsg:
+		return m.handleInstructionsLoaded(msg)
+
+	case instructionCreateMsg:
+		return m.handleInstructionCreate(msg)
+
+	case instructionToggleMsg:
+		return m.handleInstructionToggle(msg)
+
+	case instructionDeleteMsg:
+		return m.handleInstructionDelete(msg)
+
+	case rerunResultMsg:
+		return m.handleRerunResult(msg)
+
+	case queriesResultMsg:
+		return m.handleQueriesResult(msg)
+
+	case discoverResultMsg:
+		return m.handleDiscoverResult(msg)
+
+	case sessionReportMsg:
+		return m.handleSessionReport(msg)
 
 	case addConnectionResultMsg:
 		return m.handleAddConnectionResult(msg)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"hawkeye-cli/internal/api"
+	"strings"
 )
 
 // ConnectionDisplay holds display-ready connection info.
@@ -20,6 +21,11 @@ type ResourceDisplay struct {
 	TelemetryType  string
 }
 
+// cleanConnType strips the CONNECTION_TYPE_ prefix and lowercases for display.
+func cleanConnType(t string) string {
+	return strings.ToLower(strings.TrimPrefix(t, "CONNECTION_TYPE_"))
+}
+
 // FormatConnection maps a raw ConnectionSpec to a display-ready struct.
 func FormatConnection(c api.ConnectionSpec) ConnectionDisplay {
 	name := c.Name
@@ -30,9 +36,64 @@ func FormatConnection(c api.ConnectionSpec) ConnectionDisplay {
 	return ConnectionDisplay{
 		UUID:          c.UUID,
 		Name:          name,
-		Type:          c.Type,
+		Type:          cleanConnType(c.Type),
 		SyncState:     c.SyncState,
 		TrainingState: c.TrainingState,
+	}
+}
+
+// ConnectionDetailDisplay holds display-ready connection detail info.
+type ConnectionDetailDisplay struct {
+	UUID          string
+	Name          string
+	Type          string
+	SyncState     string
+	TrainingState string
+	CreateTime    string
+	UpdateTime    string
+}
+
+// FormatConnectionDetail maps a raw ConnectionDetail to a display-ready struct.
+func FormatConnectionDetail(c *api.ConnectionDetail) ConnectionDetailDisplay {
+	if c == nil {
+		return ConnectionDetailDisplay{}
+	}
+	name := c.Name
+	if name == "" {
+		name = "(unnamed)"
+	}
+	return ConnectionDetailDisplay{
+		UUID:          c.UUID,
+		Name:          name,
+		Type:          cleanConnType(c.Type),
+		SyncState:     c.SyncState,
+		TrainingState: c.TrainingState,
+		CreateTime:    c.CreateTime,
+		UpdateTime:    c.UpdateTime,
+	}
+}
+
+// ConnectionType describes a supported connection type.
+type ConnectionType struct {
+	Type        string
+	Description string
+}
+
+// GetConnectionTypes returns the list of supported connection types.
+func GetConnectionTypes() []ConnectionType {
+	return []ConnectionType{
+		{"aws", "Amazon Web Services (CloudWatch, X-Ray)"},
+		{"datadog", "Datadog monitoring platform"},
+		{"prometheus", "Prometheus metrics"},
+		{"grafana", "Grafana dashboards and datasources"},
+		{"pagerduty", "PagerDuty incident management"},
+		{"jira", "Jira issue tracking"},
+		{"slack", "Slack notifications"},
+		{"elasticsearch", "Elasticsearch / OpenSearch logs"},
+		{"gcp", "Google Cloud Platform (Cloud Monitoring)"},
+		{"azure", "Microsoft Azure Monitor"},
+		{"splunk", "Splunk observability"},
+		{"newrelic", "New Relic monitoring"},
 	}
 }
 

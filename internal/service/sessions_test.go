@@ -131,6 +131,32 @@ func TestNormalizeStatus(t *testing.T) {
 	}
 }
 
+func TestFormatQueries(t *testing.T) {
+	t.Run("nil list", func(t *testing.T) {
+		got := FormatQueries(nil)
+		if got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("with queries", func(t *testing.T) {
+		queries := []api.QueryExecution{
+			{ID: "q1", Query: "SELECT * FROM metrics", Source: "prometheus", Status: "COMPLETED"},
+			{ID: "q2", Query: "search logs", Source: "elasticsearch", Status: "FAILED", ErrorMessage: "timeout"},
+		}
+		got := FormatQueries(queries)
+		if len(got) != 2 {
+			t.Fatalf("got %d, want 2", len(got))
+		}
+		if got[0].Source != "prometheus" {
+			t.Errorf("got[0].Source = %q, want %q", got[0].Source, "prometheus")
+		}
+		if got[1].ErrorMessage != "timeout" {
+			t.Errorf("got[1].ErrorMessage = %q, want %q", got[1].ErrorMessage, "timeout")
+		}
+	})
+}
+
 func TestFormatSessionRow(t *testing.T) {
 	tests := []struct {
 		name     string

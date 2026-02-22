@@ -572,9 +572,9 @@ func TestFullFlowIntegration(t *testing.T) {
 			inCOTBlock = true
 		}
 		if ev.Type == OutputProgress && inCOTBlock {
-			// Progress is only OK after a COT block completes (between steps)
-			// Check that it's a queued progress (after completed status)
-			// This is fine — queued progress flushes between steps
+			// Progress is only OK after a COT block completes (between steps).
+			// Queued progress flushes between steps — this is expected.
+			_ = ev // acknowledge the event
 		}
 		if ev.Type == OutputChat {
 			inCOTBlock = false

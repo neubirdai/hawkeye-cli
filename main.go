@@ -73,7 +73,7 @@ func main() {
 	case "prompts":
 		err = cmdPrompts()
 	case "projects":
-		err = cmdProjects()
+		err = cmdProjects(args[1:])
 	case "score":
 		err = cmdScore(args[1:])
 	case "link":
@@ -82,6 +82,20 @@ func main() {
 		err = cmdReport()
 	case "connections":
 		err = cmdConnections(args[1:])
+	case "investigate-alert":
+		err = cmdInvestigateAlert(args[1:])
+	case "queries":
+		err = cmdQueries(args[1:])
+	case "discover":
+		err = cmdDiscover(args[1:])
+	case "resource-types":
+		err = cmdResourceTypes(args[1:])
+	case "session-report":
+		err = cmdSessionReport(args[1:])
+	case "instructions":
+		err = cmdInstructions(args[1:])
+	case "rerun":
+		err = cmdRerun(args[1:])
 	case "profiles":
 		err = cmdProfiles()
 	case "help", "--help", "-h":
@@ -881,7 +895,21 @@ func cmdPrompts() error {
 
 // ─── projects ───────────────────────────────────────────────────────────────
 
-func cmdProjects() error {
+func cmdProjects(args []string) error {
+	// Subcommand dispatch
+	if len(args) > 0 {
+		switch args[0] {
+		case "info":
+			return cmdProjectInfo(args[1:])
+		case "create":
+			return cmdProjectCreate(args[1:])
+		case "update":
+			return cmdProjectUpdate(args[1:])
+		case "delete":
+			return cmdProjectDelete(args[1:])
+		}
+	}
+
 	cfg, err := config.Load(activeProfile)
 	if err != nil {
 		return err
@@ -922,6 +950,199 @@ func cmdProjects() error {
 	fmt.Printf("  %sTip:%s Run %shawkeye set project <uuid>%s to select a project.\n\n",
 		display.Dim, display.Reset, display.Cyan, display.Reset)
 
+	return nil
+}
+
+func cmdProjectInfo(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye projects info <uuid>")
+		return nil
+	}
+
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.GetProject(args[0])
+	if err != nil {
+		return fmt.Errorf("getting project: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Spec)
+	}
+
+	p := service.FormatProjectDetail(resp.Spec)
+	display.Header(fmt.Sprintf("Project: %s", p.Name))
+	display.Info("UUID:", p.UUID)
+	if p.Description != "" {
+		display.Info("Description:", p.Description)
+	}
+	ready := display.Green + "ready" + display.Reset
+	if !p.Ready {
+		ready = display.Yellow + "not ready" + display.Reset
+	}
+	display.Info("Status:", ready)
+	if p.CreateTime != "" {
+		display.Info("Created:", p.CreateTime)
+	}
+	if p.UpdateTime != "" {
+		display.Info("Updated:", p.UpdateTime)
+	}
+	fmt.Println()
+	return nil
+}
+
+func cmdProjectCreate(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye projects create <name> [--description <text>]")
+		return nil
+	}
+
+	var description string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--description", "-d":
+			if i+1 < len(args) {
+				i++
+				description = args[i]
+			} else {
+				return fmt.Errorf("--description requires a value")
+			}
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+
+	name := strings.Join(positional, " ")
+	if name == "" {
+		fmt.Println("Usage: hawkeye projects create <name> [--description <text>]")
+		return nil
+	}
+
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.CreateProject(name, description)
+	if err != nil {
+		return fmt.Errorf("creating project: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Spec)
+	}
+
+	if resp.Spec != nil {
+		display.Success(fmt.Sprintf("Project created: %s (%s)", resp.Spec.Name, resp.Spec.UUID))
+	} else {
+		display.Success("Project created")
+	}
+	return nil
+}
+
+func cmdProjectUpdate(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye projects update <uuid> [--name <name>] [--description <text>]")
+		return nil
+	}
+
+	projectUUID := args[0]
+	var name, description string
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--name", "-n":
+			if i+1 < len(args) {
+				i++
+				name = args[i]
+			} else {
+				return fmt.Errorf("--name requires a value")
+			}
+		case "--description", "-d":
+			if i+1 < len(args) {
+				i++
+				description = args[i]
+			} else {
+				return fmt.Errorf("--description requires a value")
+			}
+		}
+	}
+
+	if name == "" && description == "" {
+		fmt.Println("Usage: hawkeye projects update <uuid> [--name <name>] [--description <text>]")
+		return nil
+	}
+
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.UpdateProject(projectUUID, name, description)
+	if err != nil {
+		return fmt.Errorf("updating project: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Spec)
+	}
+
+	display.Success(fmt.Sprintf("Project %s updated", projectUUID))
+	return nil
+}
+
+func cmdProjectDelete(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye projects delete <uuid> [--confirm]")
+		return nil
+	}
+
+	projectUUID := args[0]
+	confirmed := false
+	for _, a := range args[1:] {
+		if a == "--confirm" || a == "-y" {
+			confirmed = true
+		}
+	}
+
+	if !confirmed {
+		fmt.Printf("Delete project %s? This cannot be undone. Use --confirm to proceed.\n", projectUUID)
+		return nil
+	}
+
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	client := api.NewClient(cfg)
+	if err := client.DeleteProject(projectUUID); err != nil {
+		return fmt.Errorf("deleting project: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{"deleted": projectUUID})
+	}
+
+	display.Success(fmt.Sprintf("Project %s deleted", projectUUID))
 	return nil
 }
 
@@ -1079,8 +1300,11 @@ func cmdReport() error {
 	if len(report.IncidentTypes) > 0 {
 		fmt.Printf("\n  %s📋 By Incident Type%s\n", display.Cyan, display.Reset)
 		for _, it := range report.IncidentTypes {
-			fmt.Printf("    %s%-20s%s  count: %-5d  saved: %-10s  noise: %s\n",
-				display.Bold, it.Type, display.Reset, it.Count, it.AvgTimeSaved, it.NoiseReduction)
+			fmt.Printf("    %s%s%s\n", display.Bold, it.Type, display.Reset)
+			for _, pr := range it.Priorities {
+				fmt.Printf("      [%s]  incidents: %-5d  investigated: %-3d  grouped: %-6s  saved: %s\n",
+					pr.Priority, pr.TotalIncidents, pr.Investigated, pr.PercentGrouped, pr.AvgTimeSaved)
+			}
 		}
 	}
 
@@ -1095,17 +1319,60 @@ func cmdConnections(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := cfg.ValidateProject(); err != nil {
-		return err
+
+	// Subcommand dispatch
+	if len(args) > 0 {
+		switch args[0] {
+		case "resources":
+			if err := cfg.ValidateProject(); err != nil {
+				return err
+			}
+			if len(args) < 2 {
+				fmt.Println("Usage: hawkeye connections resources <connection-uuid>")
+				return nil
+			}
+			return cmdConnectionResources(cfg, args[1])
+		case "types":
+			return cmdConnectionTypes()
+		case "info":
+			if err := cfg.Validate(); err != nil {
+				return err
+			}
+			if len(args) < 2 {
+				fmt.Println("Usage: hawkeye connections info <connection-uuid>")
+				return nil
+			}
+			return cmdConnectionInfo(cfg, args[1])
+		case "create":
+			if err := cfg.Validate(); err != nil {
+				return err
+			}
+			return cmdConnectionCreate(cfg, args[1:])
+		case "sync":
+			if err := cfg.Validate(); err != nil {
+				return err
+			}
+			return cmdConnectionSync(cfg, args[1:])
+		case "add":
+			if err := cfg.ValidateProject(); err != nil {
+				return err
+			}
+			return cmdConnectionAdd(cfg, args[1:])
+		case "remove":
+			if err := cfg.ValidateProject(); err != nil {
+				return err
+			}
+			return cmdConnectionRemove(cfg, args[1:])
+		case "project":
+			if err := cfg.ValidateProject(); err != nil {
+				return err
+			}
+			return cmdConnectionProject(cfg, args[1:])
+		}
 	}
 
-	// Subcommand: "resources <conn-uuid>"
-	if len(args) > 0 && args[0] == "resources" {
-		if len(args) < 2 {
-			fmt.Println("Usage: hawkeye connections resources <connection-uuid>")
-			return nil
-		}
-		return cmdConnectionResources(cfg, args[1])
+	if err := cfg.ValidateProject(); err != nil {
+		return err
 	}
 
 	client := api.NewClient(cfg)
@@ -1147,6 +1414,228 @@ func cmdConnections(args []string) error {
 	return nil
 }
 
+func cmdConnectionTypes() error {
+	types := service.GetConnectionTypes()
+
+	if jsonOutput {
+		return printJSON(types)
+	}
+
+	display.Header(fmt.Sprintf("Supported Connection Types (%d)", len(types)))
+	for _, ct := range types {
+		fmt.Printf("  • %s%-15s%s %s%s%s\n", display.Bold, ct.Type, display.Reset,
+			display.Dim, ct.Description, display.Reset)
+	}
+	fmt.Println()
+	return nil
+}
+
+func cmdConnectionInfo(cfg *config.Config, connUUID string) error {
+	client := api.NewClient(cfg)
+	resp, err := client.GetConnectionInfo(connUUID)
+	if err != nil {
+		return fmt.Errorf("getting connection info: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Spec)
+	}
+
+	c := service.FormatConnectionDetail(resp.Spec)
+	display.Header(fmt.Sprintf("Connection: %s", c.Name))
+	display.Info("UUID:", c.UUID)
+	display.Info("Type:", c.Type)
+	display.Info("Sync:", c.SyncState)
+	display.Info("Training:", c.TrainingState)
+	if c.CreateTime != "" {
+		display.Info("Created:", c.CreateTime)
+	}
+	fmt.Println()
+	return nil
+}
+
+func cmdConnectionCreate(cfg *config.Config, args []string) error {
+	if len(args) < 2 {
+		fmt.Println("Usage: hawkeye connections create <type> <name> [--key value ...]")
+		fmt.Println()
+		fmt.Println("Run 'hawkeye connections types' to see supported types.")
+		return nil
+	}
+
+	connType := args[0]
+	connName := args[1]
+	connConfig := make(map[string]string)
+
+	for i := 2; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--") && i+1 < len(args) {
+			key := strings.TrimPrefix(args[i], "--")
+			i++
+			connConfig[key] = args[i]
+		}
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.CreateConnection(connName, connType, connConfig)
+	if err != nil {
+		return fmt.Errorf("creating connection: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Spec)
+	}
+
+	if resp.Spec != nil {
+		display.Success(fmt.Sprintf("Connection created: %s (%s)", resp.Spec.Name, resp.Spec.UUID))
+	} else {
+		display.Success("Connection created")
+	}
+	return nil
+}
+
+func cmdConnectionSync(cfg *config.Config, args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye connections sync <connection-uuid> [--timeout 300]")
+		return nil
+	}
+
+	connUUID := args[0]
+	timeout := 300
+
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--timeout" && i+1 < len(args) {
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("invalid timeout: %s", args[i])
+			}
+			timeout = n
+		}
+	}
+
+	display.Spinner(fmt.Sprintf("Waiting for connection %s to sync (timeout: %ds)...", connUUID, timeout))
+
+	client := api.NewClient(cfg)
+	resp, err := client.WaitForConnectionSync(connUUID, timeout)
+	display.ClearLine()
+
+	if err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Spec)
+	}
+
+	display.Success(fmt.Sprintf("Connection %s synced", connUUID))
+	return nil
+}
+
+func cmdConnectionAdd(cfg *config.Config, args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye connections add <connection-uuid> [--project <uuid>]")
+		return nil
+	}
+
+	connUUID := args[0]
+	projectUUID := cfg.ProjectID
+
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--project" && i+1 < len(args) {
+			i++
+			projectUUID = args[i]
+		}
+	}
+
+	client := api.NewClient(cfg)
+	if err := client.AddConnectionToProject(projectUUID, connUUID); err != nil {
+		return fmt.Errorf("adding connection to project: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{"added": connUUID, "project": projectUUID})
+	}
+
+	display.Success(fmt.Sprintf("Connection %s added to project %s", connUUID, projectUUID))
+	return nil
+}
+
+func cmdConnectionRemove(cfg *config.Config, args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye connections remove <connection-uuid> [--project <uuid>] [--confirm]")
+		return nil
+	}
+
+	connUUID := args[0]
+	projectUUID := cfg.ProjectID
+	confirmed := false
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--project":
+			if i+1 < len(args) {
+				i++
+				projectUUID = args[i]
+			}
+		case "--confirm", "-y":
+			confirmed = true
+		}
+	}
+
+	if !confirmed {
+		fmt.Printf("Remove connection %s from project %s? Use --confirm to proceed.\n", connUUID, projectUUID)
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	if err := client.RemoveConnectionFromProject(projectUUID, connUUID); err != nil {
+		return fmt.Errorf("removing connection from project: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{"removed": connUUID, "project": projectUUID})
+	}
+
+	display.Success(fmt.Sprintf("Connection %s removed from project %s", connUUID, projectUUID))
+	return nil
+}
+
+func cmdConnectionProject(cfg *config.Config, args []string) error {
+	projectUUID := cfg.ProjectID
+
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--project" && i+1 < len(args) {
+			i++
+			projectUUID = args[i]
+		}
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.ListProjectConnections(projectUUID)
+	if err != nil {
+		return fmt.Errorf("listing project connections: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Specs)
+	}
+
+	display.Header(fmt.Sprintf("Connections in project %s (%d)", projectUUID, len(resp.Specs)))
+
+	if len(resp.Specs) == 0 {
+		display.Warn("No connections found in this project.")
+		return nil
+	}
+
+	for _, spec := range resp.Specs {
+		c := service.FormatConnection(spec)
+		fmt.Printf("  • %s%-20s%s  %s(%s)%s  %s\n",
+			display.Bold, c.Name, display.Reset,
+			display.Dim, c.Type, display.Reset, c.UUID)
+	}
+	fmt.Println()
+	return nil
+}
+
 func cmdConnectionResources(cfg *config.Config, connUUID string) error {
 	client := api.NewClient(cfg)
 
@@ -1175,6 +1664,627 @@ func cmdConnectionResources(cfg *config.Config, connUUID string) error {
 	}
 
 	fmt.Println()
+	return nil
+}
+
+// ─── discover ───────────────────────────────────────────────────────────────
+
+func cmdDiscover(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	var telemetryType, connectionType string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--telemetry-type":
+			if i+1 < len(args) {
+				i++
+				telemetryType = args[i]
+			}
+		case "--connection-type":
+			if i+1 < len(args) {
+				i++
+				connectionType = args[i]
+			}
+		case "--project":
+			if i+1 < len(args) {
+				i++
+				cfg.ProjectID = args[i]
+			}
+		}
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.DiscoverProjectResources(cfg.ProjectID, telemetryType, connectionType)
+	if err != nil {
+		return fmt.Errorf("discovering resources: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Resources)
+	}
+
+	resources := service.FormatDiscoveredResources(resp.Resources)
+	display.Header(fmt.Sprintf("Discovered Resources (%d)", len(resources)))
+
+	if len(resources) == 0 {
+		display.Warn("No resources found.")
+		return nil
+	}
+
+	for _, r := range resources {
+		fmt.Printf("  • %s%-30s%s  %s%s%s  %s(%s)%s\n",
+			display.Bold, r.Name, display.Reset,
+			display.Dim, r.TelemetryType, display.Reset,
+			display.Dim, r.ConnectionUUID, display.Reset)
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// ─── resource-types ─────────────────────────────────────────────────────────
+
+func cmdResourceTypes(args []string) error {
+	var connectionType, telemetryType string
+
+	if len(args) >= 1 {
+		connectionType = args[0]
+	}
+	if len(args) >= 2 {
+		telemetryType = args[1]
+	}
+
+	types := service.GetResourceTypes(connectionType, telemetryType)
+
+	if jsonOutput {
+		return printJSON(types)
+	}
+
+	display.Header(fmt.Sprintf("Resource Types (%d)", len(types)))
+
+	if len(types) == 0 {
+		display.Warn("No resource types found for the given parameters.")
+		return nil
+	}
+
+	for _, rt := range types {
+		fmt.Printf("  • %s%-25s%s %s%s%s\n",
+			display.Bold, rt.Type, display.Reset,
+			display.Dim, rt.Description, display.Reset)
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// ─── session-report ─────────────────────────────────────────────────────────
+
+func cmdSessionReport(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	if len(args) == 0 {
+		if cfg.LastSession != "" {
+			args = []string{cfg.LastSession}
+		} else {
+			fmt.Println("Usage: hawkeye session-report <session-uuid> [<uuid>...]")
+			return nil
+		}
+	}
+
+	client := api.NewClient(cfg)
+
+	items, err := client.GetSessionReport(cfg.ProjectID, args)
+	if err != nil {
+		return fmt.Errorf("getting session report: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(items)
+	}
+
+	display.Header(fmt.Sprintf("Session Reports (%d)", len(items)))
+
+	for _, item := range items {
+		fmt.Printf("\n  %s%s%s\n", display.Bold, item.Prompt, display.Reset)
+		if item.Summary != "" {
+			fmt.Printf("  %sSummary:%s %s\n", display.Dim, display.Reset, truncate(item.Summary, 120))
+		}
+		if item.TimeSaved > 0 {
+			fmt.Printf("  %sTime saved:%s %d min\n", display.Blue+display.Bold, display.Reset, item.TimeSaved/60)
+		}
+		if item.SessionLink != "" {
+			fmt.Printf("  %sLink:%s %s\n", display.Dim, display.Reset, item.SessionLink)
+		}
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// ─── investigate-alert ──────────────────────────────────────────────────────
+
+func cmdInvestigateAlert(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye investigate-alert <alert-id> [--project <uuid>]")
+		return nil
+	}
+
+	alertID := args[0]
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	projectUUID := cfg.ProjectID
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--project" && i+1 < len(args) {
+			i++
+			projectUUID = args[i]
+		}
+	}
+
+	client := api.NewClient(cfg)
+
+	fmt.Println()
+	display.Spinner("Creating session from alert...")
+	sessResp, err := client.CreateSessionFromAlert(projectUUID, alertID)
+	if err != nil {
+		display.ClearLine()
+		return fmt.Errorf("creating session from alert: %w", err)
+	}
+	display.ClearLine()
+
+	sessionUUID := sessResp.SessionUUID
+	display.Success(fmt.Sprintf("Session created from alert: %s", sessionUUID))
+
+	cfg.LastSession = sessionUUID
+	_ = cfg.Save()
+
+	// Auto-send a prompt to start the investigation
+	prompt := fmt.Sprintf("Investigate alert %s", alertID)
+	streamDisplay := api.NewStreamDisplay(false)
+	err = client.ProcessPromptStream(projectUUID, sessionUUID, prompt, streamDisplay.HandleEvent)
+
+	fmt.Println()
+	if err != nil {
+		return fmt.Errorf("stream error: %w", err)
+	}
+
+	display.Success("Investigation complete")
+	return nil
+}
+
+// ─── queries ────────────────────────────────────────────────────────────────
+
+func cmdQueries(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if cfg.LastSession != "" {
+		sessionUUID = cfg.LastSession
+	} else {
+		fmt.Println("Usage: hawkeye queries [session-uuid]")
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.GetInvestigationQueries(cfg.ProjectID, sessionUUID)
+	if err != nil {
+		return fmt.Errorf("getting queries: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Queries)
+	}
+
+	queries := service.FormatQueries(resp.Queries)
+	display.Header(fmt.Sprintf("Investigation Queries (%d)", len(queries)))
+
+	if len(queries) == 0 {
+		display.Warn("No queries found.")
+		return nil
+	}
+
+	for i, q := range queries {
+		statusIcon := "✅"
+		switch q.Status {
+		case "FAILED", "ERROR":
+			statusIcon = "❌"
+		case "RUNNING", "IN_PROGRESS":
+			statusIcon = "🔄"
+		}
+
+		fmt.Printf("\n  %s %sQuery %d%s  %s(%s)%s\n", statusIcon, display.Bold, i+1, display.Reset,
+			display.Dim, q.Source, display.Reset)
+		if q.Query != "" {
+			fmt.Printf("    %s%s%s\n", display.Gray, truncate(q.Query, 100), display.Reset)
+		}
+		if q.ExecutionTime != "" {
+			fmt.Printf("    %sTime:%s %s", display.Dim, display.Reset, q.ExecutionTime)
+		}
+		if q.ResultCount > 0 {
+			fmt.Printf("  %sResults:%s %d", display.Dim, display.Reset, q.ResultCount)
+		}
+		if q.ExecutionTime != "" || q.ResultCount > 0 {
+			fmt.Println()
+		}
+		if q.ErrorMessage != "" {
+			fmt.Printf("    %sError:%s %s\n", display.Red, display.Reset, q.ErrorMessage)
+		}
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// ─── instructions ───────────────────────────────────────────────────────────
+
+func cmdInstructions(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	// Subcommand dispatch
+	if len(args) > 0 {
+		switch args[0] {
+		case "create":
+			return cmdInstructionCreate(cfg, args[1:])
+		case "enable":
+			return cmdInstructionToggle(cfg, args[1:], true)
+		case "disable":
+			return cmdInstructionToggle(cfg, args[1:], false)
+		case "delete":
+			return cmdInstructionDelete(cfg, args[1:])
+		case "validate":
+			return cmdInstructionValidate(cfg, args[1:])
+		case "apply":
+			return cmdInstructionApply(cfg, args[1:])
+		case "info":
+			// info falls through to list with filter
+			if len(args) < 2 {
+				fmt.Println("Usage: hawkeye instructions info <uuid>")
+				return nil
+			}
+			return cmdInstructionInfo(cfg, args[1])
+		}
+	}
+
+	// Default: list instructions
+	client := api.NewClient(cfg)
+	resp, err := client.ListInstructions(cfg.ProjectID)
+	if err != nil {
+		return fmt.Errorf("listing instructions: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Instructions)
+	}
+
+	instructions := service.FormatInstructions(resp.Instructions)
+	display.Header(fmt.Sprintf("Instructions (%d)", len(instructions)))
+
+	if len(instructions) == 0 {
+		display.Warn("No instructions found.")
+		return nil
+	}
+
+	for _, instr := range instructions {
+		status := display.Green + "enabled" + display.Reset
+		if !instr.Enabled {
+			status = display.Dim + "disabled" + display.Reset
+		}
+		fmt.Printf("\n  %s%s%s  %s[%s]%s  %s\n",
+			display.Bold, instr.Name, display.Reset,
+			display.Dim, instr.Type, display.Reset, status)
+		fmt.Printf("    %sUUID:%s %s\n", display.Dim, display.Reset, instr.UUID)
+		if instr.Content != "" {
+			fmt.Printf("    %s%s%s\n", display.Gray, truncate(instr.Content, 80), display.Reset)
+		}
+	}
+
+	fmt.Println()
+	return nil
+}
+
+func cmdInstructionInfo(cfg *config.Config, instrUUID string) error {
+	client := api.NewClient(cfg)
+	resp, err := client.ListInstructions(cfg.ProjectID)
+	if err != nil {
+		return fmt.Errorf("listing instructions: %w", err)
+	}
+
+	for _, s := range resp.Instructions {
+		if s.UUID == instrUUID {
+			if jsonOutput {
+				return printJSON(s)
+			}
+			instr := service.FormatInstruction(s)
+			display.Header(fmt.Sprintf("Instruction: %s", instr.Name))
+			display.Info("UUID:", instr.UUID)
+			display.Info("Type:", instr.Type)
+			status := "enabled"
+			if !instr.Enabled {
+				status = "disabled"
+			}
+			display.Info("Status:", status)
+			if instr.Content != "" {
+				fmt.Printf("\n  %sContent:%s\n", display.Dim, display.Reset)
+				fmt.Printf("  %s\n", instr.Content)
+			}
+			fmt.Println()
+			return nil
+		}
+	}
+
+	return fmt.Errorf("instruction %s not found", instrUUID)
+}
+
+func cmdInstructionCreate(cfg *config.Config, args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye instructions create <name> --type <filter|system|grouping|rca> --content <text>")
+		return nil
+	}
+
+	var instrType, content string
+	var positional []string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--type", "-t":
+			if i+1 < len(args) {
+				i++
+				instrType = args[i]
+			} else {
+				return fmt.Errorf("--type requires a value")
+			}
+		case "--content", "-c":
+			if i+1 < len(args) {
+				i++
+				content = args[i]
+			} else {
+				return fmt.Errorf("--content requires a value")
+			}
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+
+	name := strings.Join(positional, " ")
+	if name == "" || instrType == "" || content == "" {
+		fmt.Println("Usage: hawkeye instructions create <name> --type <filter|system|grouping|rca> --content <text>")
+		return nil
+	}
+
+	if !service.ValidInstructionType(instrType) {
+		return fmt.Errorf("invalid instruction type: %s (valid: filter, system, grouping, rca)", instrType)
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.CreateInstruction(cfg.ProjectID, name, instrType, content)
+	if err != nil {
+		return fmt.Errorf("creating instruction: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp.Instruction)
+	}
+
+	if resp.Instruction != nil {
+		display.Success(fmt.Sprintf("Instruction created: %s (%s)", resp.Instruction.Name, resp.Instruction.UUID))
+	} else {
+		display.Success("Instruction created")
+	}
+	return nil
+}
+
+func cmdInstructionToggle(cfg *config.Config, args []string, enable bool) error {
+	if len(args) == 0 {
+		action := "enable"
+		if !enable {
+			action = "disable"
+		}
+		fmt.Printf("Usage: hawkeye instructions %s <uuid>\n", action)
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	if err := client.UpdateInstructionStatus(args[0], enable); err != nil {
+		return fmt.Errorf("updating instruction: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]any{"uuid": args[0], "enabled": enable})
+	}
+
+	action := "enabled"
+	if !enable {
+		action = "disabled"
+	}
+	display.Success(fmt.Sprintf("Instruction %s %s", args[0], action))
+	return nil
+}
+
+func cmdInstructionDelete(cfg *config.Config, args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye instructions delete <uuid> [--confirm]")
+		return nil
+	}
+
+	instrUUID := args[0]
+	confirmed := false
+	for _, a := range args[1:] {
+		if a == "--confirm" || a == "-y" {
+			confirmed = true
+		}
+	}
+
+	if !confirmed {
+		fmt.Printf("Delete instruction %s? Use --confirm to proceed.\n", instrUUID)
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	if err := client.DeleteInstruction(instrUUID); err != nil {
+		return fmt.Errorf("deleting instruction: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{"deleted": instrUUID})
+	}
+
+	display.Success(fmt.Sprintf("Instruction %s deleted", instrUUID))
+	return nil
+}
+
+func cmdInstructionValidate(cfg *config.Config, args []string) error {
+	var instrType, content string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--type", "-t":
+			if i+1 < len(args) {
+				i++
+				instrType = args[i]
+			}
+		case "--content", "-c":
+			if i+1 < len(args) {
+				i++
+				content = args[i]
+			}
+		}
+	}
+
+	if instrType == "" || content == "" {
+		fmt.Println("Usage: hawkeye instructions validate --type <type> --content <text>")
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.ValidateInstruction(instrType, content)
+	if err != nil {
+		return fmt.Errorf("validating instruction: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp)
+	}
+
+	if resp.Instruction != nil {
+		display.Success("Instruction content is valid")
+		display.Info("Name:", resp.Instruction.Name)
+		display.Info("Type:", resp.Instruction.Type)
+		display.Info("Content:", resp.Instruction.Content)
+	} else {
+		display.Error("Instruction validation failed")
+	}
+	return nil
+}
+
+func cmdInstructionApply(cfg *config.Config, args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye instructions apply <session-uuid> --type <type> --content <text>")
+		return nil
+	}
+
+	sessionUUID := args[0]
+	var instrType, content string
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--type", "-t":
+			if i+1 < len(args) {
+				i++
+				instrType = args[i]
+			}
+		case "--content", "-c":
+			if i+1 < len(args) {
+				i++
+				content = args[i]
+			}
+		}
+	}
+
+	if instrType == "" || content == "" {
+		fmt.Println("Usage: hawkeye instructions apply <session-uuid> --type <type> --content <text>")
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	if err := client.ApplySessionInstruction(sessionUUID, instrType, content); err != nil {
+		return fmt.Errorf("applying instruction: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{"applied": sessionUUID, "type": instrType})
+	}
+
+	display.Success(fmt.Sprintf("Instruction applied to session %s", sessionUUID))
+	return nil
+}
+
+// ─── rerun ──────────────────────────────────────────────────────────────────
+
+func cmdRerun(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if cfg.LastSession != "" {
+		sessionUUID = cfg.LastSession
+	} else {
+		fmt.Println("Usage: hawkeye rerun <session-uuid>")
+		return nil
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.RerunSession(sessionUUID)
+	if err != nil {
+		return fmt.Errorf("rerunning session: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(resp)
+	}
+
+	display.Success(fmt.Sprintf("Rerun started for session %s", sessionUUID))
+	if resp.SessionUUID != "" && resp.SessionUUID != sessionUUID {
+		display.Info("New session:", resp.SessionUUID)
+	}
 	return nil
 }
 
@@ -1289,9 +2399,19 @@ func printUsage() {
 
 %sGetting Started:%s
   login <url> -u <user> -p <pass>  Authenticate (URL = frontend address)
-  projects                         List available projects
   set project <uuid>               Set the active project UUID
   config                           Show current configuration
+
+%sProjects:%s
+  projects                         List available projects
+  projects info <uuid>             Get project details
+  projects create <name>           Create a new project
+    --description <text>           Project description
+  projects update <uuid>           Update a project
+    --name <name>                  New project name
+    --description <text>           New description
+  projects delete <uuid>           Delete a project
+    --confirm                      Skip confirmation prompt
 
 %sSettings:%s
   set server <url>          Override the server URL
@@ -1300,9 +2420,12 @@ func printUsage() {
   set org <uuid>            Set the organization UUID
 
 %sInvestigation:%s
-  investigate|ask "<question>"  Run an AI-powered investigation (streams output)
-    -s, --session <uuid>    Continue in an existing session
-  link [session-uuid]       Get web UI URL for a session
+  investigate|ask "<question>"         Run an AI-powered investigation (streams output)
+    -s, --session <uuid>               Continue in an existing session
+  investigate-alert <alert-id>         Investigate from an alert
+    --project <uuid>                   Override project UUID
+  queries [session-uuid]               Show investigation queries
+  link [session-uuid]                  Get web UI URL for a session
 
 %sSessions:%s
   sessions                  List recent investigation sessions
@@ -1322,8 +2445,42 @@ func printUsage() {
   report                    Show org-wide incident analytics
 
 %sConnections:%s
-  connections [list]                  List data source connections
-  connections resources <conn-uuid>   List resources for a connection
+  connections                              List data source connections
+  connections resources <conn-uuid>        List resources for a connection
+  connections types                        List supported connection types
+  connections info <conn-uuid>             Get connection details
+  connections create <type> <name>         Create a connection
+  connections sync <conn-uuid>             Wait for connection sync
+    --timeout <seconds>                    Timeout in seconds (default: 300)
+  connections add <conn-uuid>              Add connection to current project
+  connections remove <conn-uuid>           Remove connection from project
+    --confirm                              Skip confirmation prompt
+  connections project                      List project connections
+
+%sInstructions:%s
+  instructions                     List project instructions
+  instructions info <uuid>         Get instruction details
+  instructions create <name>       Create an instruction
+    --type <filter|system|grouping|rca>  Instruction type
+    --content <text>               Instruction content
+  instructions enable <uuid>       Enable an instruction
+  instructions disable <uuid>      Disable an instruction
+  instructions delete <uuid>       Delete an instruction
+    --confirm                      Skip confirmation prompt
+  instructions validate            Validate instruction content
+    --type <type>                  Instruction type
+    --content <text>               Content to validate
+  instructions apply <session-uuid>  Apply instruction to session
+    --type <type>                  Instruction type
+    --content <text>               Instruction content
+  rerun <session-uuid>             Rerun an investigation
+
+%sDiscovery & Reports:%s
+  discover                         Discover project resources
+    --telemetry-type <type>        Filter by telemetry type (metric, log, trace)
+    --connection-type <type>       Filter by connection type (aws, datadog, etc.)
+  resource-types <conn> <telemetry>  List resource types (static)
+  session-report <uuid> [<uuid>...]  Per-session report with time-saved metrics
 
 %sLibrary:%s
   prompts                   Browse available investigation prompts
@@ -1348,15 +2505,18 @@ func printUsage() {
   hawkeye --profile staging login https://myenv.app.neubird.ai/ -u user -p pass
 
 `, display.Bold, display.Reset, version,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset,
-		display.Cyan, display.Reset)
+		display.Cyan, display.Reset, // Usage
+		display.Cyan, display.Reset, // Global Options
+		display.Cyan, display.Reset, // Getting Started
+		display.Cyan, display.Reset, // Projects
+		display.Cyan, display.Reset, // Settings
+		display.Cyan, display.Reset, // Investigation
+		display.Cyan, display.Reset, // Sessions
+		display.Cyan, display.Reset, // Analysis
+		display.Cyan, display.Reset, // Connections
+		display.Cyan, display.Reset, // Instructions
+		display.Cyan, display.Reset, // Discovery & Reports
+		display.Cyan, display.Reset, // Library
+		display.Cyan, display.Reset, // Profiles
+		display.Cyan, display.Reset) // Examples
 }

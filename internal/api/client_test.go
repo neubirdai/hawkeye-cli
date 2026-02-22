@@ -483,14 +483,14 @@ func TestGetIncidentReport(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{
 			"avg_investigation_time_saved_minutes": 15.5,
 			"avg_mttr": 30.2,
-			"noise_reduction": 0.45,
+			"noise_reduction": 45.0,
 			"total_incidents": 100,
 			"total_investigations": 150,
 			"total_investigation_time_saved_hours": 38.75,
 			"start_time": "2025-01-01",
 			"end_time": "2025-06-30",
 			"incident_type_reports": [
-				{"type":"alert","count":50,"avg_investigation_time_saved_minutes":10.0,"noise_reduction":0.3}
+				{"incident_type":"alert","priority_reports":[{"priority":"0","total_incidents":50,"avg_time_saved_minutes":10.0}]}
 			]
 		}`)
 	}))
@@ -585,6 +585,733 @@ func TestListConnectionResources(t *testing.T) {
 	}
 	if resp.Specs[1].TelemetryType != "log" {
 		t.Errorf("Specs[1].TelemetryType = %q, want %q", resp.Specs[1].TelemetryType, "log")
+	}
+}
+
+// ─── Phase 1: Project CRUD ──────────────────────────────────────────────────
+
+func TestGetProject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/gendb/spec/proj-1") {
+			t.Errorf("path = %s, want suffix /v1/gendb/spec/proj-1", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"proj-1","name":"My Project","description":"desc","ready":true,"create_time":"2025-01-01"}}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.GetProject("proj-1")
+	if err != nil {
+		t.Fatalf("GetProject() error = %v", err)
+	}
+	if resp.Spec == nil {
+		t.Fatal("Spec is nil")
+	}
+	if resp.Spec.Name != "My Project" {
+		t.Errorf("Name = %q, want %q", resp.Spec.Name, "My Project")
+	}
+	if !resp.Spec.Ready {
+		t.Error("Ready = false, want true")
+	}
+}
+
+func TestCreateProject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/gendb/spec" {
+			t.Errorf("path = %s, want /v1/gendb/spec", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req CreateProjectRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.Name != "New Project" {
+			t.Errorf("Name = %q, want %q", req.Name, "New Project")
+		}
+		if req.Description != "A test project" {
+			t.Errorf("Description = %q, want %q", req.Description, "A test project")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"new-uuid","name":"New Project","description":"A test project"}}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.CreateProject("New Project", "A test project")
+	if err != nil {
+		t.Fatalf("CreateProject() error = %v", err)
+	}
+	if resp.Spec == nil {
+		t.Fatal("Spec is nil")
+	}
+	if resp.Spec.UUID != "new-uuid" {
+		t.Errorf("UUID = %q, want %q", resp.Spec.UUID, "new-uuid")
+	}
+}
+
+func TestUpdateProject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			t.Errorf("method = %s, want PATCH", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/gendb/spec/proj-1") {
+			t.Errorf("path = %s, want suffix /v1/gendb/spec/proj-1", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req UpdateProjectRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.Name != "Updated" {
+			t.Errorf("Name = %q, want %q", req.Name, "Updated")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"proj-1","name":"Updated"}}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.UpdateProject("proj-1", "Updated", "new desc")
+	if err != nil {
+		t.Fatalf("UpdateProject() error = %v", err)
+	}
+	if resp.Spec.Name != "Updated" {
+		t.Errorf("Name = %q, want %q", resp.Spec.Name, "Updated")
+	}
+}
+
+func TestDeleteProject(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "DELETE" {
+				t.Errorf("method = %s, want DELETE", r.Method)
+			}
+			if !strings.HasSuffix(r.URL.Path, "/v1/gendb/spec/proj-1") {
+				t.Errorf("path = %s, want suffix /v1/gendb/spec/proj-1", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+		if err := c.DeleteProject("proj-1"); err != nil {
+			t.Fatalf("DeleteProject() error = %v", err)
+		}
+	})
+
+	t.Run("server error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"response":{"error_code":404,"error_message":"not found"}}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+		err := c.DeleteProject("proj-1")
+		if err == nil {
+			t.Fatal("expected error for server error response")
+		}
+		if !strings.Contains(err.Error(), "not found") {
+			t.Errorf("error = %q, want to contain 'not found'", err.Error())
+		}
+	})
+}
+
+// ─── Phase 2: Connections ───────────────────────────────────────────────────
+
+func TestGetConnectionInfo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/connection/conn-1") {
+			t.Errorf("path = %s, want suffix /v1/connection/conn-1", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"conn-1","name":"Datadog Prod","connection_type":"datadog","sync_state":"SYNCED","training_state":"TRAINED"}}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.GetConnectionInfo("conn-1")
+	if err != nil {
+		t.Fatalf("GetConnectionInfo() error = %v", err)
+	}
+	if resp.Spec.Name != "Datadog Prod" {
+		t.Errorf("Name = %q, want %q", resp.Spec.Name, "Datadog Prod")
+	}
+	if resp.Spec.SyncState != "SYNCED" {
+		t.Errorf("SyncState = %q, want %q", resp.Spec.SyncState, "SYNCED")
+	}
+}
+
+func TestCreateConnection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/datasource/connection" {
+			t.Errorf("path = %s, want /v1/datasource/connection", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req CreateConnectionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.Name != "My AWS" {
+			t.Errorf("Name = %q, want %q", req.Name, "My AWS")
+		}
+		if req.Type != "aws" {
+			t.Errorf("Type = %q, want %q", req.Type, "aws")
+		}
+		if req.Config["role_arn"] != "arn:aws:iam::123:role/test" {
+			t.Errorf("Config[role_arn] = %q", req.Config["role_arn"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"spec":{"uuid":"new-conn","name":"My AWS","type":"aws"}}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	cfg := map[string]string{"role_arn": "arn:aws:iam::123:role/test"}
+	resp, err := c.CreateConnection("My AWS", "aws", cfg)
+	if err != nil {
+		t.Fatalf("CreateConnection() error = %v", err)
+	}
+	if resp.Spec.UUID != "new-conn" {
+		t.Errorf("UUID = %q, want %q", resp.Spec.UUID, "new-conn")
+	}
+}
+
+func TestWaitForConnectionSync(t *testing.T) {
+	t.Run("already synced", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"spec":{"uuid":"conn-1","sync_state":"SYNCED"}}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+		resp, err := c.WaitForConnectionSync("conn-1", 10)
+		if err != nil {
+			t.Fatalf("WaitForConnectionSync() error = %v", err)
+		}
+		if resp.Spec.SyncState != "SYNCED" {
+			t.Errorf("SyncState = %q, want SYNCED", resp.Spec.SyncState)
+		}
+	})
+
+	t.Run("sync failed", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"spec":{"uuid":"conn-1","sync_state":"SYNC_STATE_FAILED"}}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+		_, err := c.WaitForConnectionSync("conn-1", 10)
+		if err == nil {
+			t.Fatal("expected error for failed sync")
+		}
+		if !strings.Contains(err.Error(), "sync failed") {
+			t.Errorf("error = %q, want to contain 'sync failed'", err.Error())
+		}
+	})
+}
+
+func TestAddConnectionToProject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/v1/gendb/spec/proj-1/datasource-connections") {
+			t.Errorf("path = %s, want to contain /v1/gendb/spec/proj-1/datasource-connections", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req AddConnectionToProjectRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.ConnectionUUID != "conn-1" {
+			t.Errorf("ConnectionUUID = %q, want %q", req.ConnectionUUID, "conn-1")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	if err := c.AddConnectionToProject("proj-1", "conn-1"); err != nil {
+		t.Fatalf("AddConnectionToProject() error = %v", err)
+	}
+}
+
+func TestRemoveConnectionFromProject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/v1/gendb/spec/proj-1/datasource-connections") {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req RemoveConnectionFromProjectRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.ConnectionUUID != "conn-1" {
+			t.Errorf("ConnectionUUID = %q, want %q", req.ConnectionUUID, "conn-1")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	if err := c.RemoveConnectionFromProject("proj-1", "conn-1"); err != nil {
+		t.Fatalf("RemoveConnectionFromProject() error = %v", err)
+	}
+}
+
+func TestListProjectConnections(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/connection") {
+			t.Errorf("path = %s, want suffix /v1/connection", r.URL.Path)
+		}
+		if r.URL.Query().Get("project_uuid") != "proj-1" {
+			t.Errorf("project_uuid = %q, want %q", r.URL.Query().Get("project_uuid"), "proj-1")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","connection_type":"datadog"},{"uuid":"c2","name":"AWS","connection_type":"aws"}]}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.ListProjectConnections("proj-1")
+	if err != nil {
+		t.Fatalf("ListProjectConnections() error = %v", err)
+	}
+	if len(resp.Specs) != 2 {
+		t.Fatalf("got %d specs, want 2", len(resp.Specs))
+	}
+	if resp.Specs[0].Name != "DD" {
+		t.Errorf("Specs[0].Name = %q, want %q", resp.Specs[0].Name, "DD")
+	}
+}
+
+// ─── Phase 3: Instructions ──────────────────────────────────────────────────
+
+func TestListInstructions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/v1/instruction" {
+			t.Errorf("path = %s, want /v1/instruction", r.URL.Path)
+		}
+		if r.URL.Query().Get("project_uuid") != "proj-1" {
+			t.Errorf("project_uuid = %q, want proj-1", r.URL.Query().Get("project_uuid"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"instructions":[{"uuid":"i1","name":"Filter noise","type":"filter","content":"ignore 404s","enabled":true}]}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.ListInstructions("proj-1")
+	if err != nil {
+		t.Fatalf("ListInstructions() error = %v", err)
+	}
+	if len(resp.Instructions) != 1 {
+		t.Fatalf("got %d instructions, want 1", len(resp.Instructions))
+	}
+	if resp.Instructions[0].Name != "Filter noise" {
+		t.Errorf("Name = %q, want %q", resp.Instructions[0].Name, "Filter noise")
+	}
+	if !resp.Instructions[0].Enabled {
+		t.Error("Enabled = false, want true")
+	}
+}
+
+func TestCreateInstruction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/instruction" {
+			t.Errorf("path = %s, want /v1/instruction", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req CreateInstructionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.Instruction.Name != "My rule" {
+			t.Errorf("Instruction.Name = %q, want %q", req.Instruction.Name, "My rule")
+		}
+		if req.Instruction.Type != "filter" {
+			t.Errorf("Instruction.Type = %q, want %q", req.Instruction.Type, "filter")
+		}
+		if req.Instruction.Content != "ignore 404s" {
+			t.Errorf("Instruction.Content = %q, want %q", req.Instruction.Content, "ignore 404s")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"instruction":{"uuid":"new-instr","name":"My rule","type":"filter","content":"ignore 404s","enabled":true}}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.CreateInstruction("proj-1", "My rule", "filter", "ignore 404s")
+	if err != nil {
+		t.Fatalf("CreateInstruction() error = %v", err)
+	}
+	if resp.Instruction.UUID != "new-instr" {
+		t.Errorf("UUID = %q, want %q", resp.Instruction.UUID, "new-instr")
+	}
+}
+
+func TestUpdateInstructionStatus(t *testing.T) {
+	t.Run("enable", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "PUT" {
+				t.Errorf("method = %s, want PUT", r.Method)
+			}
+			if !strings.HasSuffix(r.URL.Path, "/v1/instruction/instr-1") {
+				t.Errorf("path = %s", r.URL.Path)
+			}
+			body, _ := io.ReadAll(r.Body)
+			var req UpdateInstructionStatusRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if req.Status != "INSTRUCTION_STATUS_ENABLED" {
+				t.Errorf("Status = %q, want INSTRUCTION_STATUS_ENABLED", req.Status)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+		if err := c.UpdateInstructionStatus("instr-1", true); err != nil {
+			t.Fatalf("UpdateInstructionStatus() error = %v", err)
+		}
+	})
+
+	t.Run("server error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"response":{"error_code":403,"error_message":"forbidden"}}`)
+		}))
+		defer srv.Close()
+
+		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+		err := c.UpdateInstructionStatus("instr-1", true)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "forbidden") {
+			t.Errorf("error = %q, want to contain 'forbidden'", err.Error())
+		}
+	})
+}
+
+func TestDeleteInstruction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/instruction/instr-1") {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	if err := c.DeleteInstruction("instr-1"); err != nil {
+		t.Fatalf("DeleteInstruction() error = %v", err)
+	}
+}
+
+func TestValidateInstruction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/instruction/validate" {
+			t.Errorf("path = %s, want /v1/instruction/validate", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req ValidateInstructionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.Instruction.Type != "filter" {
+			t.Errorf("Instruction.Type = %q, want %q", req.Instruction.Type, "filter")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"instruction":{"name":"test-rule","type":"filter","content":"test content"}}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.ValidateInstruction("filter", "test content")
+	if err != nil {
+		t.Fatalf("ValidateInstruction() error = %v", err)
+	}
+	if resp.Instruction == nil {
+		t.Fatal("Instruction is nil, want non-nil")
+	}
+	if resp.Instruction.Name != "test-rule" {
+		t.Errorf("Name = %q, want %q", resp.Instruction.Name, "test-rule")
+	}
+}
+
+func TestApplySessionInstruction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/v1/inference/session/sess-1/instructions") {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req ApplySessionInstructionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.Type != "system" {
+			t.Errorf("Type = %q, want %q", req.Type, "system")
+		}
+		if req.Content != "focus on RCA" {
+			t.Errorf("Content = %q, want %q", req.Content, "focus on RCA")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	if err := c.ApplySessionInstruction("sess-1", "system", "focus on RCA"); err != nil {
+		t.Fatalf("ApplySessionInstruction() error = %v", err)
+	}
+}
+
+func TestRerunSession(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/inference/session/sess-1:rerun") {
+			t.Errorf("path = %s, want suffix /v1/inference/session/sess-1:rerun", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"session_uuid":"sess-1-rerun"}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.RerunSession("sess-1")
+	if err != nil {
+		t.Fatalf("RerunSession() error = %v", err)
+	}
+	if resp.SessionUUID != "sess-1-rerun" {
+		t.Errorf("SessionUUID = %q, want %q", resp.SessionUUID, "sess-1-rerun")
+	}
+}
+
+// ─── Phase 4: Investigation Enhancements ────────────────────────────────────
+
+func TestCreateSessionFromAlert(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/inference/session:create" {
+			t.Errorf("path = %s, want /v1/inference/session:create", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req CreateSessionFromAlertRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if req.ProjectUUID != "proj-1" {
+			t.Errorf("ProjectUUID = %q, want %q", req.ProjectUUID, "proj-1")
+		}
+		if req.AlertID != "alert-42" {
+			t.Errorf("AlertID = %q, want %q", req.AlertID, "alert-42")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"session_uuid":"alert-sess-uuid"}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.CreateSessionFromAlert("proj-1", "alert-42")
+	if err != nil {
+		t.Fatalf("CreateSessionFromAlert() error = %v", err)
+	}
+	if resp.SessionUUID != "alert-sess-uuid" {
+		t.Errorf("SessionUUID = %q, want %q", resp.SessionUUID, "alert-sess-uuid")
+	}
+}
+
+func TestGetInvestigationQueries(t *testing.T) {
+	// GetInvestigationQueries now internally calls SessionInspect and extracts queries from chain_of_thoughts.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/inference/session/inspect" {
+			t.Errorf("path = %s, want /v1/inference/session/inspect", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"prompt_cycle":[{"chain_of_thoughts":[
+			{"id":"q1","description":"Check error logs","status":"done","sources_involved":["log_source"]},
+			{"id":"q2","description":"Check metrics","status":"done","sources_involved":[]}
+		]}]}`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
+	resp, err := c.GetInvestigationQueries("proj-1", "sess-1")
+	if err != nil {
+		t.Fatalf("GetInvestigationQueries() error = %v", err)
+	}
+	if len(resp.Queries) != 2 {
+		t.Fatalf("got %d queries, want 2", len(resp.Queries))
+	}
+	if resp.Queries[0].Query != "Check error logs" {
+		t.Errorf("Queries[0].Query = %q, want %q", resp.Queries[0].Query, "Check error logs")
+	}
+	if resp.Queries[0].Source != "log_source" {
+		t.Errorf("Queries[0].Source = %q, want %q", resp.Queries[0].Source, "log_source")
+	}
+}
+
+// ─── Phase 5: Discovery & Reports ───────────────────────────────────────────
+
+func TestDiscoverProjectResources(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		// First call: ListProjectConnections
+		if r.URL.Path == "/v1/connection" && r.URL.Query().Get("project_uuid") != "" {
+			_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","connection_type":"datadog"},{"uuid":"c2","name":"AWS","connection_type":"aws"}]}`)
+			return
+		}
+		// Subsequent calls: ListConnectionResources for each connection
+		if strings.Contains(r.URL.Path, "/v1/resource") {
+			connUUID := r.URL.Query().Get("connection_uuid")
+			if connUUID == "c1" {
+				_, _ = fmt.Fprint(w, `{"specs":[{"id":{"name":"cpu","uuid":"r1"},"connection_uuid":"c1","telemetry_type":"metric"}]}`)
+			} else {
+				_, _ = fmt.Fprint(w, `{"specs":[{"id":{"name":"logs","uuid":"r2"},"connection_uuid":"c2","telemetry_type":"log"}]}`)
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.DiscoverProjectResources("proj-1", "", "")
+	if err != nil {
+		t.Fatalf("DiscoverProjectResources() error = %v", err)
+	}
+	if len(resp.Resources) != 2 {
+		t.Fatalf("got %d resources, want 2", len(resp.Resources))
+	}
+
+	// Test filtering by telemetry type
+	resp2, err := c.DiscoverProjectResources("proj-1", "metric", "")
+	if err != nil {
+		t.Fatalf("DiscoverProjectResources(metric) error = %v", err)
+	}
+	if len(resp2.Resources) != 1 {
+		t.Fatalf("filtered got %d resources, want 1", len(resp2.Resources))
+	}
+	if resp2.Resources[0].ID.Name != "cpu" {
+		t.Errorf("filtered resource = %q, want %q", resp2.Resources[0].ID.Name, "cpu")
+	}
+}
+
+func TestDiscoverProjectResourcesFilterByConnectionType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/connection" && r.URL.Query().Get("project_uuid") != "" {
+			_, _ = fmt.Fprint(w, `{"specs":[{"uuid":"c1","name":"DD","connection_type":"datadog"},{"uuid":"c2","name":"AWS","connection_type":"aws"}]}`)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/v1/resource") {
+			connUUID := r.URL.Query().Get("connection_uuid")
+			if connUUID == "c1" {
+				_, _ = fmt.Fprint(w, `{"specs":[{"id":{"name":"cpu","uuid":"r1"},"connection_uuid":"c1","telemetry_type":"metric"}]}`)
+			} else {
+				_, _ = fmt.Fprint(w, `{"specs":[{"id":{"name":"logs","uuid":"r2"},"connection_uuid":"c2","telemetry_type":"log"}]}`)
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	resp, err := c.DiscoverProjectResources("proj-1", "", "aws")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(resp.Resources) != 1 {
+		t.Fatalf("got %d resources, want 1 (aws only)", len(resp.Resources))
+	}
+	if resp.Resources[0].ID.Name != "logs" {
+		t.Errorf("resource = %q, want %q", resp.Resources[0].ID.Name, "logs")
+	}
+}
+
+func TestGetSessionReport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/v1/inference/session_report" {
+			t.Errorf("path = %s, want /v1/inference/session_report", r.URL.Path)
+		}
+		if r.URL.Query().Get("project_uuid") != "proj-1" {
+			t.Errorf("project_uuid = %q", r.URL.Query().Get("project_uuid"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `[{"summary":"Root cause: memory leak","time_saved":1500,"session_link":"https://example.com/sess-1"}]`)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok"}
+	items, err := c.GetSessionReport("proj-1", []string{"sess-1"})
+	if err != nil {
+		t.Fatalf("GetSessionReport() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if items[0].Summary != "Root cause: memory leak" {
+		t.Errorf("Summary = %q", items[0].Summary)
+	}
+	if items[0].TimeSaved != 1500 {
+		t.Errorf("TimeSaved = %d, want 1500", items[0].TimeSaved)
 	}
 }
 
