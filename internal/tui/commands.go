@@ -192,6 +192,7 @@ func (m model) handleLoginPassSubmit(value string) (tea.Model, tea.Cmd) {
 			}
 
 			cfg.Server = backendURL
+			cfg.FrontendURL = strings.TrimRight(serverURL, "/")
 			cfg.Username = username
 			cfg.Token = loginResp.AccessToken
 
