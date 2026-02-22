@@ -481,9 +481,36 @@ func TestSessionName(t *testing.T) {
 
 func TestExecTime(t *testing.T) {
 	sp := NewStreamProcessor()
-	out := sp.Process(streamChunkMsg{contentType: "CONTENT_TYPE_EXECUTION_TIME", text: "42s"})
-	if len(out) != 1 || out[0].Type != OutputExecTime || out[0].Text != "42s" {
-		t.Errorf("unexpected exec time output: %v", out)
+	// Test with milliseconds (as sent by the backend)
+	out := sp.Process(streamChunkMsg{contentType: "CONTENT_TYPE_EXECUTION_TIME", text: "301213"})
+	if len(out) != 1 || out[0].Type != OutputExecTime || out[0].Text != "5m 1s" {
+		t.Errorf("unexpected exec time output: %v (expected '5m 1s')", out)
+	}
+}
+
+func TestFormatExecTime(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"500", "500ms"},
+		{"1000", "1s"},
+		{"1500", "1.5s"},
+		{"42000", "42s"},
+		{"60000", "1m"},
+		{"90000", "1m 30s"},
+		{"301213", "5m 1s"},
+		{"3600000", "1h"},
+		{"3660000", "1h 1m"},
+		{"invalid", "invalid"},
+		{"", ""},
+	}
+
+	for _, tc := range tests {
+		result := formatExecTime(tc.input)
+		if result != tc.expected {
+			t.Errorf("formatExecTime(%q) = %q, expected %q", tc.input, result, tc.expected)
+		}
 	}
 }
 
