@@ -453,31 +453,24 @@ func TestHandleLoginResult(t *testing.T) {
 
 func TestResetStreamState(t *testing.T) {
 	m := newTestModel()
-	m.chatPrinted = 100
-	m.chatBuffer = "partial"
-	m.cotStepActive = true
-	m.chatStreaming = true
-	m.lastStatus = "working..."
-	m.cotStepNum = 3
+	// Dirty the processor so we can confirm it gets replaced
+	m.processor.Process(streamChunkMsg{
+		contentType: "CONTENT_TYPE_PROGRESS_STATUS",
+		text:        "(Loading Investigation Programs)",
+	})
+	if m.processor.LastStatus() == "" {
+		t.Fatal("expected non-empty status before reset")
+	}
 
 	m.resetStreamState()
 
-	if m.chatPrinted != 0 {
-		t.Errorf("chatPrinted = %d, want 0", m.chatPrinted)
+	if m.processor == nil {
+		t.Fatal("processor should not be nil after reset")
 	}
-	if m.chatBuffer != "" {
-		t.Errorf("chatBuffer = %q, want empty", m.chatBuffer)
+	if m.processor.LastStatus() != "" {
+		t.Errorf("LastStatus() = %q, want empty after reset", m.processor.LastStatus())
 	}
-	if m.cotStepActive {
-		t.Error("cotStepActive should be false")
-	}
-	if m.chatStreaming {
-		t.Error("chatStreaming should be false")
-	}
-	if m.lastStatus != "" {
-		t.Errorf("lastStatus = %q, want empty", m.lastStatus)
-	}
-	if m.cotStepNum != 0 {
-		t.Errorf("cotStepNum = %d, want 0", m.cotStepNum)
+	if m.streamPrompt != "" {
+		t.Errorf("streamPrompt = %q, want empty after reset", m.streamPrompt)
 	}
 }
