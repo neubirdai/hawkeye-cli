@@ -6,6 +6,64 @@ import (
 	"hawkeye-cli/internal/api"
 )
 
+func TestFormatConnectionDetail(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *api.ConnectionDetail
+		wantName string
+		wantType string
+	}{
+		{
+			name:     "nil input",
+			input:    nil,
+			wantName: "",
+			wantType: "",
+		},
+		{
+			name:     "with fields",
+			input:    &api.ConnectionDetail{UUID: "c1", Name: "Datadog Prod", Type: "datadog", SyncState: "SYNCED"},
+			wantName: "Datadog Prod",
+			wantType: "datadog",
+		},
+		{
+			name:     "unnamed",
+			input:    &api.ConnectionDetail{UUID: "c2", Type: "prometheus"},
+			wantName: "(unnamed)",
+			wantType: "prometheus",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatConnectionDetail(tt.input)
+			if got.Name != tt.wantName {
+				t.Errorf("Name = %q, want %q", got.Name, tt.wantName)
+			}
+			if got.Type != tt.wantType {
+				t.Errorf("Type = %q, want %q", got.Type, tt.wantType)
+			}
+		})
+	}
+}
+
+func TestGetConnectionTypes(t *testing.T) {
+	types := GetConnectionTypes()
+	if len(types) == 0 {
+		t.Error("expected non-empty connection types list")
+	}
+	// Verify aws is in the list
+	found := false
+	for _, ct := range types {
+		if ct.Type == "aws" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'aws' in connection types")
+	}
+}
+
 func TestFormatConnection(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -183,11 +183,11 @@ func TestMatchCommands(t *testing.T) {
 	}{
 		{"/", len(slashCommands)},
 		{"/h", 1}, // /help
-		{"/s", 5}, // /score, /session, /sessions, /set, /summary
-		{"/q", 1}, // /quit
+		{"/s", 6}, // /score, /session, /session-report, /sessions, /set, /summary
+		{"/q", 2}, // /queries, /quit
 		{"/xyz", 0},
 		{"/login", 1},
-		{"/se", 3}, // /session, /sessions, /set
+		{"/se", 4}, // /session, /session-report, /sessions, /set
 	}
 
 	for _, tt := range tests {

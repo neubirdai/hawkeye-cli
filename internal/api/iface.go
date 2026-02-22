@@ -13,7 +13,28 @@ type HawkeyeAPI interface {
 	PutRating(projectUUID, sessionUUID string, itemIDs []RatingItemID, rating, reason string) error
 	PromptLibrary(projectUUID string) (*PromptLibraryResponse, error)
 	ListProjects() (*ListProjectResponse, error)
+	GetProject(projectUUID string) (*GetProjectResponse, error)
+	CreateProject(name, description string) (*CreateProjectResponse, error)
+	UpdateProject(projectUUID, name, description string) (*UpdateProjectResponse, error)
+	DeleteProject(projectUUID string) error
 	GetIncidentReport() (*IncidentReportResponse, error)
 	ListConnections(projectUUID string) (*ListConnectionsResponse, error)
 	ListConnectionResources(connUUID string, limit int) (*ListResourcesResponse, error)
+	GetConnectionInfo(connUUID string) (*GetConnectionResponse, error)
+	CreateConnection(name, connType string, connConfig map[string]string) (*CreateConnectionResponse, error)
+	WaitForConnectionSync(connUUID string, timeoutSeconds int) (*GetConnectionResponse, error)
+	AddConnectionToProject(projectUUID, connUUID string) error
+	RemoveConnectionFromProject(projectUUID, connUUID string) error
+	ListProjectConnections(projectUUID string) (*ListProjectConnectionsResponse, error)
+	ListInstructions(projectUUID string) (*ListInstructionsResponse, error)
+	CreateInstruction(projectUUID, name, instrType, content string) (*CreateInstructionResponse, error)
+	UpdateInstructionStatus(instrUUID string, enabled bool) error
+	DeleteInstruction(instrUUID string) error
+	ValidateInstruction(instrType, content string) (*ValidateInstructionResponse, error)
+	ApplySessionInstruction(sessionUUID, instrType, content string) error
+	RerunSession(sessionUUID string) (*RerunSessionResponse, error)
+	CreateSessionFromAlert(projectUUID, alertID string) (*NewSessionResponse, error)
+	GetInvestigationQueries(sessionUUID string) (*GetInvestigationQueriesResponse, error)
+	DiscoverProjectResources(projectUUID, telemetryType, connectionType string) (*DiscoverResourcesResponse, error)
+	GetSessionReport(sessionUUID string) (*SessionReportResponse, error)
 }

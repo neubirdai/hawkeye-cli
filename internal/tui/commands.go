@@ -40,7 +40,7 @@ func (m model) dispatchCommand(input string) (tea.Model, tea.Cmd) {
 	case "/login":
 		return m.cmdLogin(args)
 	case "/projects":
-		return m.cmdProjects()
+		return m.cmdProjects(args)
 	case "/sessions":
 		return m.cmdSessions()
 	case "/inspect":
@@ -65,6 +65,18 @@ func (m model) dispatchCommand(input string) (tea.Model, tea.Cmd) {
 		return m.cmdReport()
 	case "/connections":
 		return m.cmdConnections(args)
+	case "/instructions":
+		return m.cmdInstructions(args)
+	case "/rerun":
+		return m.cmdRerun(args)
+	case "/investigate-alert":
+		return m.cmdInvestigateAlert(args)
+	case "/queries":
+		return m.cmdQueries(args)
+	case "/discover":
+		return m.cmdDiscover()
+	case "/session-report":
+		return m.cmdSessionReport(args)
 	case "/session":
 		return m.cmdSetSession(args)
 	case "/quit", "/exit", "/q":
@@ -97,6 +109,12 @@ func (m model) cmdHelp() (tea.Model, tea.Cmd) {
 		tea.Println("  " + pad(hintKeyStyle.Render("/link <uuid>"), 30) + dimStyle.Render("Get web UI URL for session")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/report"), 30) + dimStyle.Render("Show incident analytics")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/connections"), 30) + dimStyle.Render("List data source connections")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/instructions"), 30) + dimStyle.Render("Manage project instructions")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/investigate-alert <id>"), 30) + dimStyle.Render("Investigate an alert")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/queries [uuid]"), 30) + dimStyle.Render("Show investigation queries")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/rerun [uuid]"), 30) + dimStyle.Render("Rerun an investigation")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/discover"), 30) + dimStyle.Render("Discover project resources")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/session-report [uuid]"), 30) + dimStyle.Render("Per-session time-saved report")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/prompts"), 30) + dimStyle.Render("Browse investigation prompts")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/set project <uuid>"), 30) + dimStyle.Render("Set the active project")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/session <uuid>"), 30) + dimStyle.Render("Set active session for follow-ups")),
@@ -685,9 +703,21 @@ type projectsLoadedMsg struct {
 	err      error
 }
 
-func (m model) cmdProjects() (tea.Model, tea.Cmd) {
+func (m model) cmdProjects(args []string) (tea.Model, tea.Cmd) {
 	if m.client == nil {
 		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+
+	// Subcommand dispatch
+	if len(args) > 0 {
+		switch args[0] {
+		case "info":
+			return m.cmdProjectInfo(args[1:])
+		case "create":
+			return m.cmdProjectCreate(args[1:])
+		case "delete":
+			return m.cmdProjectDelete(args[1:])
+		}
 	}
 
 	client := m.client
@@ -738,6 +768,128 @@ func (m model) handleProjectsLoaded(msg projectsLoadedMsg) (tea.Model, tea.Cmd) 
 	)
 
 	return m, tea.Sequence(cmds...)
+}
+
+// ─── /projects info ──────────────────────────────────────────────────────────
+
+type projectInfoMsg struct {
+	detail service.ProjectDetailDisplay
+	err    error
+}
+
+func (m model) cmdProjectInfo(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /projects info <uuid>"))
+	}
+	projectUUID := args[0]
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading project %s...", truncateUUID(projectUUID)))),
+		func() tea.Msg {
+			resp, err := client.GetProject(projectUUID)
+			if err != nil {
+				return projectInfoMsg{err: err}
+			}
+			return projectInfoMsg{detail: service.FormatProjectDetail(resp.Spec)}
+		},
+	)
+}
+
+func (m model) handleProjectInfo(msg projectInfoMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+
+	p := msg.detail
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Println(""))
+	cmds = append(cmds, tea.Println(fmt.Sprintf("  Project: %s", p.Name)))
+	cmds = append(cmds, tea.Println(dimStyle.Render(fmt.Sprintf("    UUID: %s", p.UUID))))
+	if p.Description != "" {
+		cmds = append(cmds, tea.Println(dimStyle.Render(fmt.Sprintf("    Description: %s", p.Description))))
+	}
+	ready := successMsgStyle.Render("ready")
+	if !p.Ready {
+		ready = warnMsgStyle.Render("not ready")
+	}
+	cmds = append(cmds, tea.Println(fmt.Sprintf("    Status: %s", ready)))
+	if p.CreateTime != "" {
+		cmds = append(cmds, tea.Println(dimStyle.Render(fmt.Sprintf("    Created: %s", p.CreateTime))))
+	}
+	cmds = append(cmds, tea.Println(""))
+	return m, tea.Sequence(cmds...)
+}
+
+// ─── /projects create ───────────────────────────────────────────────────────
+
+type projectCreateMsg struct {
+	spec *api.ProjectDetail
+	err  error
+}
+
+func (m model) cmdProjectCreate(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /projects create <name>"))
+	}
+	name := strings.Join(args, " ")
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Creating project '%s'...", name))),
+		func() tea.Msg {
+			resp, err := client.CreateProject(name, "")
+			if err != nil {
+				return projectCreateMsg{err: err}
+			}
+			return projectCreateMsg{spec: resp.Spec}
+		},
+	)
+}
+
+func (m model) handleProjectCreate(msg projectCreateMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+	if msg.spec != nil {
+		return m, tea.Sequence(
+			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project created: %s", msg.spec.Name))),
+			tea.Println(dimStyle.Render(fmt.Sprintf("    UUID: %s", msg.spec.UUID))),
+			tea.Println(dimStyle.Render("    Use /set project <uuid> to activate")),
+			tea.Println(""),
+		)
+	}
+	return m, tea.Println(successMsgStyle.Render("  ✓ Project created"))
+}
+
+// ─── /projects delete ───────────────────────────────────────────────────────
+
+type projectDeleteMsg struct {
+	uuid string
+	err  error
+}
+
+func (m model) cmdProjectDelete(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /projects delete <uuid>"))
+	}
+	projectUUID := args[0]
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Deleting project %s...", truncateUUID(projectUUID)))),
+		func() tea.Msg {
+			err := client.DeleteProject(projectUUID)
+			return projectDeleteMsg{uuid: projectUUID, err: err}
+		},
+	)
+}
+
+func (m model) handleProjectDelete(msg projectDeleteMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Delete failed: %v", msg.err)))
+	}
+	return m, tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project %s deleted", truncateUUID(msg.uuid))))
 }
 
 // ─── /set ───────────────────────────────────────────────────────────────────
@@ -988,26 +1140,37 @@ func (m model) cmdConnections(args []string) (tea.Model, tea.Cmd) {
 		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Run /projects first."))
 	}
 
-	// Subcommand: resources <uuid>
-	if len(args) > 0 && args[0] == "resources" {
-		if len(args) < 2 {
-			return m, tea.Println(warnMsgStyle.Render("  ! Usage: /connections resources <connection-uuid>"))
+	// Subcommand dispatch
+	if len(args) > 0 {
+		switch args[0] {
+		case "resources":
+			if len(args) < 2 {
+				return m, tea.Println(warnMsgStyle.Render("  ! Usage: /connections resources <connection-uuid>"))
+			}
+			connUUID := args[1]
+			client := m.client
+			return m, tea.Sequence(
+				tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading resources for %s...", truncateUUID(connUUID)))),
+				func() tea.Msg {
+					resp, err := client.ListConnectionResources(connUUID, 100)
+					if err != nil {
+						return resourcesResultMsg{err: err}
+					}
+					return resourcesResultMsg{
+						resources: service.FormatResources(resp.Specs),
+						connUUID:  connUUID,
+					}
+				},
+			)
+		case "types":
+			return m.cmdConnectionTypes()
+		case "info":
+			return m.cmdConnectionInfo(args[1:])
+		case "add":
+			return m.cmdConnectionAdd(args[1:])
+		case "remove":
+			return m.cmdConnectionRemove(args[1:])
 		}
-		connUUID := args[1]
-		client := m.client
-		return m, tea.Sequence(
-			tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading resources for %s...", truncateUUID(connUUID)))),
-			func() tea.Msg {
-				resp, err := client.ListConnectionResources(connUUID, 100)
-				if err != nil {
-					return resourcesResultMsg{err: err}
-				}
-				return resourcesResultMsg{
-					resources: service.FormatResources(resp.Specs),
-					connUUID:  connUUID,
-				}
-			},
-		)
 	}
 
 	client := m.client
@@ -1027,6 +1190,113 @@ func (m model) cmdConnections(args []string) (tea.Model, tea.Cmd) {
 			return connectionsResultMsg{connections: conns}
 		},
 	)
+}
+
+func (m model) cmdConnectionTypes() (tea.Model, tea.Cmd) {
+	types := service.GetConnectionTypes()
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Println(""), tea.Println(dimStyle.Render(fmt.Sprintf("  Connection Types (%d):", len(types)))), tea.Println(""))
+	for _, ct := range types {
+		cmds = append(cmds, tea.Println(fmt.Sprintf("  • %-15s %s", ct.Type, dimStyle.Render(ct.Description))))
+	}
+	cmds = append(cmds, tea.Println(""))
+	return m, tea.Sequence(cmds...)
+}
+
+type connInfoMsg struct {
+	detail service.ConnectionDetailDisplay
+	err    error
+}
+
+func (m model) cmdConnectionInfo(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /connections info <uuid>"))
+	}
+	connUUID := args[0]
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading connection %s...", truncateUUID(connUUID)))),
+		func() tea.Msg {
+			resp, err := client.GetConnectionInfo(connUUID)
+			if err != nil {
+				return connInfoMsg{err: err}
+			}
+			return connInfoMsg{detail: service.FormatConnectionDetail(resp.Spec)}
+		},
+	)
+}
+
+func (m model) handleConnInfo(msg connInfoMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+	c := msg.detail
+	return m, tea.Sequence(
+		tea.Println(""),
+		tea.Println(fmt.Sprintf("  Connection: %s", c.Name)),
+		tea.Println(dimStyle.Render(fmt.Sprintf("    UUID: %s  Type: %s", c.UUID, c.Type))),
+		tea.Println(dimStyle.Render(fmt.Sprintf("    Sync: %s  Training: %s", c.SyncState, c.TrainingState))),
+		tea.Println(""),
+	)
+}
+
+type connAddMsg struct {
+	connUUID string
+	err      error
+}
+
+func (m model) cmdConnectionAdd(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /connections add <uuid>"))
+	}
+	connUUID := args[0]
+	client := m.client
+	projectID := m.cfg.ProjectID
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Adding connection %s...", truncateUUID(connUUID)))),
+		func() tea.Msg {
+			err := client.AddConnectionToProject(projectID, connUUID)
+			return connAddMsg{connUUID: connUUID, err: err}
+		},
+	)
+}
+
+func (m model) handleConnAdd(msg connAddMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+	return m, tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Connection %s added to project", truncateUUID(msg.connUUID))))
+}
+
+type connRemoveMsg struct {
+	connUUID string
+	err      error
+}
+
+func (m model) cmdConnectionRemove(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /connections remove <uuid>"))
+	}
+	connUUID := args[0]
+	client := m.client
+	projectID := m.cfg.ProjectID
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Removing connection %s...", truncateUUID(connUUID)))),
+		func() tea.Msg {
+			err := client.RemoveConnectionFromProject(projectID, connUUID)
+			return connRemoveMsg{connUUID: connUUID, err: err}
+		},
+	)
+}
+
+func (m model) handleConnRemove(msg connRemoveMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+	return m, tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Connection %s removed from project", truncateUUID(msg.connUUID))))
 }
 
 func (m model) handleConnectionsResult(msg connectionsResultMsg) (tea.Model, tea.Cmd) {
@@ -1083,6 +1353,441 @@ func (m model) handleResourcesResult(msg resourcesResultMsg) (tea.Model, tea.Cmd
 
 	for _, r := range msg.resources {
 		cmds = append(cmds, tea.Println(fmt.Sprintf("  • %-30s  %s", r.Name, dimStyle.Render(r.TelemetryType))))
+	}
+
+	cmds = append(cmds, tea.Println(""))
+	return m, tea.Sequence(cmds...)
+}
+
+// ─── /instructions ──────────────────────────────────────────────────────────
+
+type instructionsLoadedMsg struct {
+	instructions []service.InstructionDisplay
+	err          error
+}
+
+func (m model) cmdInstructions(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+	if m.cfg.ProjectID == "" {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Run /projects first."))
+	}
+
+	// Subcommand dispatch
+	if len(args) > 0 {
+		switch args[0] {
+		case "create":
+			return m.cmdInstructionCreate(args[1:])
+		case "enable":
+			return m.cmdInstructionToggle(args[1:], true)
+		case "disable":
+			return m.cmdInstructionToggle(args[1:], false)
+		case "delete":
+			return m.cmdInstructionDelete(args[1:])
+		}
+	}
+
+	client := m.client
+	projectID := m.cfg.ProjectID
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render("  ⟳ Loading instructions...")),
+		func() tea.Msg {
+			resp, err := client.ListInstructions(projectID)
+			if err != nil {
+				return instructionsLoadedMsg{err: err}
+			}
+			return instructionsLoadedMsg{instructions: service.FormatInstructions(resp.Specs)}
+		},
+	)
+}
+
+func (m model) handleInstructionsLoaded(msg instructionsLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+
+	if len(msg.instructions) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! No instructions found."))
+	}
+
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Println(""), tea.Println(dimStyle.Render(fmt.Sprintf("  Instructions (%d):", len(msg.instructions)))), tea.Println(""))
+
+	for _, instr := range msg.instructions {
+		status := successMsgStyle.Render("enabled")
+		if !instr.Enabled {
+			status = dimStyle.Render("disabled")
+		}
+		cmds = append(cmds,
+			tea.Println(fmt.Sprintf("  %s  [%s]  %s", instr.Name, instr.Type, status)),
+			tea.Println(dimStyle.Render(fmt.Sprintf("    %s", instr.UUID))),
+		)
+	}
+	cmds = append(cmds, tea.Println(""))
+	return m, tea.Sequence(cmds...)
+}
+
+type instructionCreateMsg struct {
+	spec *api.InstructionSpec
+	err  error
+}
+
+func (m model) cmdInstructionCreate(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /instructions create <name>"))
+	}
+	name := strings.Join(args, " ")
+	client := m.client
+	projectID := m.cfg.ProjectID
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Creating instruction '%s'...", name))),
+		func() tea.Msg {
+			resp, err := client.CreateInstruction(projectID, name, "system", "")
+			if err != nil {
+				return instructionCreateMsg{err: err}
+			}
+			return instructionCreateMsg{spec: resp.Spec}
+		},
+	)
+}
+
+func (m model) handleInstructionCreate(msg instructionCreateMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+	if msg.spec != nil {
+		return m, tea.Sequence(
+			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Instruction created: %s", msg.spec.Name))),
+			tea.Println(dimStyle.Render(fmt.Sprintf("    UUID: %s", msg.spec.UUID))),
+		)
+	}
+	return m, tea.Println(successMsgStyle.Render("  ✓ Instruction created"))
+}
+
+type instructionToggleMsg struct {
+	uuid    string
+	enabled bool
+	err     error
+}
+
+func (m model) cmdInstructionToggle(args []string, enable bool) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		action := "enable"
+		if !enable {
+			action = "disable"
+		}
+		return m, tea.Println(warnMsgStyle.Render(fmt.Sprintf("  ! Usage: /instructions %s <uuid>", action)))
+	}
+	instrUUID := args[0]
+	client := m.client
+
+	action := "Enabling"
+	if !enable {
+		action = "Disabling"
+	}
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ %s %s...", action, truncateUUID(instrUUID)))),
+		func() tea.Msg {
+			err := client.UpdateInstructionStatus(instrUUID, enable)
+			return instructionToggleMsg{uuid: instrUUID, enabled: enable, err: err}
+		},
+	)
+}
+
+func (m model) handleInstructionToggle(msg instructionToggleMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+	action := "enabled"
+	if !msg.enabled {
+		action = "disabled"
+	}
+	return m, tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Instruction %s %s", truncateUUID(msg.uuid), action)))
+}
+
+type instructionDeleteMsg struct {
+	uuid string
+	err  error
+}
+
+func (m model) cmdInstructionDelete(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /instructions delete <uuid>"))
+	}
+	instrUUID := args[0]
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Deleting instruction %s...", truncateUUID(instrUUID)))),
+		func() tea.Msg {
+			err := client.DeleteInstruction(instrUUID)
+			return instructionDeleteMsg{uuid: instrUUID, err: err}
+		},
+	)
+}
+
+func (m model) handleInstructionDelete(msg instructionDeleteMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed: %v", msg.err)))
+	}
+	return m, tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Instruction %s deleted", truncateUUID(msg.uuid))))
+}
+
+// ─── /rerun ─────────────────────────────────────────────────────────────────
+
+type rerunResultMsg struct {
+	sessionUUID string
+	err         error
+}
+
+func (m model) cmdRerun(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if m.sessionID != "" {
+		sessionUUID = m.sessionID
+	} else {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /rerun [session-uuid]"))
+	}
+
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Rerunning session %s...", truncateUUID(sessionUUID)))),
+		func() tea.Msg {
+			resp, err := client.RerunSession(sessionUUID)
+			if err != nil {
+				return rerunResultMsg{err: err}
+			}
+			return rerunResultMsg{sessionUUID: resp.SessionUUID}
+		},
+	)
+}
+
+func (m model) handleRerunResult(msg rerunResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Rerun failed: %v", msg.err)))
+	}
+	return m, tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Rerun started (session: %s)", truncateUUID(msg.sessionUUID))))
+}
+
+// ─── /investigate-alert ──────────────────────────────────────────────────────
+
+func (m model) cmdInvestigateAlert(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+	if m.cfg == nil || m.cfg.ProjectID == "" {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Use /set project <uuid>"))
+	}
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /investigate-alert <alert-id>"))
+	}
+
+	alertID := args[0]
+	m.mode = modeStreaming
+	m.resetStreamState()
+	m.streamPrompt = fmt.Sprintf("Investigate alert %s", alertID)
+
+	client := m.client
+	projectID := m.cfg.ProjectID
+
+	return m, tea.Sequence(
+		tea.Println(""),
+		tea.Println(userPromptStyle.Render("  ❯ Investigate alert: "+alertID)),
+		tea.Println(""),
+		tea.Println(statusStyle.Render("  ⟳ Creating session from alert...")),
+		func() tea.Msg {
+			sessResp, err := client.CreateSessionFromAlert(projectID, alertID)
+			if err != nil {
+				return streamErrMsg{err: fmt.Errorf("creating alert session: %w", err)}
+			}
+			return sessionCreatedMsg{sessionID: sessResp.SessionUUID}
+		},
+	)
+}
+
+// ─── /queries ───────────────────────────────────────────────────────────────
+
+type queriesResultMsg struct {
+	queries []service.QueryDisplay
+	err     error
+}
+
+func (m model) cmdQueries(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if m.sessionID != "" {
+		sessionUUID = m.sessionID
+	} else {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /queries [session-uuid]"))
+	}
+
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading queries for %s...", truncateUUID(sessionUUID)))),
+		func() tea.Msg {
+			resp, err := client.GetInvestigationQueries(sessionUUID)
+			if err != nil {
+				return queriesResultMsg{err: err}
+			}
+			return queriesResultMsg{queries: service.FormatQueries(resp.Queries)}
+		},
+	)
+}
+
+func (m model) handleQueriesResult(msg queriesResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Queries failed: %v", msg.err)))
+	}
+
+	if len(msg.queries) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! No queries found."))
+	}
+
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Println(""), tea.Println(dimStyle.Render(fmt.Sprintf("  Queries (%d):", len(msg.queries)))), tea.Println(""))
+
+	for i, q := range msg.queries {
+		statusIcon := "✅"
+		if q.Status == "FAILED" || q.Status == "ERROR" {
+			statusIcon = "❌"
+		}
+		cmds = append(cmds, tea.Println(fmt.Sprintf("  %s Query %d  (%s)", statusIcon, i+1, q.Source)))
+		if q.Query != "" {
+			query := q.Query
+			if len(query) > 80 {
+				query = query[:77] + "..."
+			}
+			cmds = append(cmds, tea.Println(dimStyle.Render("    "+query)))
+		}
+	}
+
+	cmds = append(cmds, tea.Println(""))
+	return m, tea.Sequence(cmds...)
+}
+
+// ─── /discover ──────────────────────────────────────────────────────────────
+
+type discoverResultMsg struct {
+	resources []service.DiscoveredResource
+	err       error
+}
+
+func (m model) cmdDiscover() (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+	if m.cfg.ProjectID == "" {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Run /projects first."))
+	}
+
+	client := m.client
+	projectID := m.cfg.ProjectID
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render("  ⟳ Discovering project resources...")),
+		func() tea.Msg {
+			resp, err := client.DiscoverProjectResources(projectID, "", "")
+			if err != nil {
+				return discoverResultMsg{err: err}
+			}
+			return discoverResultMsg{resources: service.FormatDiscoveredResources(resp.Resources)}
+		},
+	)
+}
+
+func (m model) handleDiscoverResult(msg discoverResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Discovery failed: %v", msg.err)))
+	}
+
+	if len(msg.resources) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! No resources discovered."))
+	}
+
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Println(""), tea.Println(dimStyle.Render(fmt.Sprintf("  Discovered Resources (%d):", len(msg.resources)))), tea.Println(""))
+
+	for _, r := range msg.resources {
+		cmds = append(cmds, tea.Println(fmt.Sprintf("  • %-30s %s", r.Name, dimStyle.Render(r.TelemetryType))))
+	}
+
+	cmds = append(cmds, tea.Println(""))
+	return m, tea.Sequence(cmds...)
+}
+
+// ─── /session-report ────────────────────────────────────────────────────────
+
+type sessionReportMsg struct {
+	report service.SessionReportDisplay
+	err    error
+}
+
+func (m model) cmdSessionReport(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+
+	sessionUUID := ""
+	if len(args) > 0 {
+		sessionUUID = args[0]
+	} else if m.sessionID != "" {
+		sessionUUID = m.sessionID
+	} else {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /session-report [session-uuid]"))
+	}
+
+	client := m.client
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading report for %s...", truncateUUID(sessionUUID)))),
+		func() tea.Msg {
+			resp, err := client.GetSessionReport(sessionUUID)
+			if err != nil {
+				return sessionReportMsg{err: err}
+			}
+			return sessionReportMsg{report: service.FormatSessionReport(resp)}
+		},
+	)
+}
+
+func (m model) handleSessionReport(msg sessionReportMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Report failed: %v", msg.err)))
+	}
+
+	r := msg.report
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Println(""), tea.Println(dimStyle.Render("  Session Report:")))
+
+	if r.Summary != "" {
+		cmds = append(cmds, tea.Println(dimStyle.Render("    Summary: "+r.Summary)))
+	}
+
+	if r.TimeSaved != nil {
+		cmds = append(cmds, tea.Println(fmt.Sprintf("    ⏱  Time saved: %.0f min (%.0f → %.0f)",
+			r.TimeSaved.TimeSavedMinutes,
+			r.TimeSaved.StandardInvestigationMin,
+			r.TimeSaved.HawkeyeInvestigationMin)))
+	}
+
+	if r.HasScores {
+		cmds = append(cmds, tea.Println(fmt.Sprintf("    📊 Accuracy: %.1f/100  Completeness: %.1f/100", r.Accuracy, r.Completeness)))
 	}
 
 	cmds = append(cmds, tea.Println(""))

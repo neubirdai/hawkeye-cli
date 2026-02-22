@@ -56,3 +56,41 @@ func FormatReport(resp *api.IncidentReportResponse) ReportDisplay {
 
 	return display
 }
+
+// SessionReportDisplay holds display-ready per-session report data.
+type SessionReportDisplay struct {
+	SessionID    string
+	Summary      string
+	TimeSaved    *TimeSavedDisplay
+	HasScores    bool
+	Accuracy     float64
+	Completeness float64
+}
+
+// FormatSessionReport transforms raw session report into a display-ready struct.
+func FormatSessionReport(resp *api.SessionReportResponse) SessionReportDisplay {
+	if resp == nil {
+		return SessionReportDisplay{}
+	}
+
+	display := SessionReportDisplay{
+		SessionID: resp.SessionID,
+		Summary:   resp.Summary,
+	}
+
+	if resp.TimeSaved != nil {
+		display.TimeSaved = &TimeSavedDisplay{
+			TimeSavedMinutes:         resp.TimeSaved.TimeSavedMinutes,
+			StandardInvestigationMin: resp.TimeSaved.StandardInvestigationMin,
+			HawkeyeInvestigationMin:  resp.TimeSaved.HawkeyeInvestigationMin,
+		}
+	}
+
+	if resp.Score != nil {
+		display.HasScores = true
+		display.Accuracy = resp.Score.Accuracy.Score
+		display.Completeness = resp.Score.Completeness.Score
+	}
+
+	return display
+}

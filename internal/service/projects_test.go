@@ -6,6 +6,46 @@ import (
 	"hawkeye-cli/internal/api"
 )
 
+func TestFormatProjectDetail(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *api.ProjectDetail
+		wantName string
+		wantUUID string
+	}{
+		{
+			name:     "nil input",
+			input:    nil,
+			wantName: "",
+			wantUUID: "",
+		},
+		{
+			name:     "with all fields",
+			input:    &api.ProjectDetail{UUID: "p1", Name: "Prod", Description: "Production env", Ready: true, CreateTime: "2025-01-01"},
+			wantName: "Prod",
+			wantUUID: "p1",
+		},
+		{
+			name:     "unnamed project",
+			input:    &api.ProjectDetail{UUID: "p2"},
+			wantName: "(unnamed)",
+			wantUUID: "p2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatProjectDetail(tt.input)
+			if got.Name != tt.wantName {
+				t.Errorf("Name = %q, want %q", got.Name, tt.wantName)
+			}
+			if got.UUID != tt.wantUUID {
+				t.Errorf("UUID = %q, want %q", got.UUID, tt.wantUUID)
+			}
+		})
+	}
+}
+
 func TestFilterSystemProjects(t *testing.T) {
 	tests := []struct {
 		name    string
