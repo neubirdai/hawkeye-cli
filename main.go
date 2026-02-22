@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -98,6 +99,8 @@ func main() {
 		err = cmdRerun(args[1:])
 	case "profiles":
 		err = cmdProfiles()
+	case "setup-claude":
+		err = cmdSetupClaude(args[1:])
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version", "-v":
@@ -2322,6 +2325,198 @@ func cmdProfiles() error {
 	return nil
 }
 
+// ─── setup-claude ───────────────────────────────────────────────────────────
+
+// claudeSkillContent is the SKILL.md file embedded in the binary.
+// It uses Go string concatenation to include backtick-fenced blocks.
+var claudeSkillContent = `---
+name: hawkeye
+description: >-
+  Hawkeye AI SRE Platform — investigate incidents, review root cause analyses,
+  manage alerts and connections, view analytics, and configure project instructions.
+  Trigger on: incident, outage, alert, SRE, RCA, on-call, pager, downtime,
+  investigation, root cause, postmortem, latency, error rate, monitoring.
+allowed-tools:
+  - Bash(hawkeye *)
+---
+
+# Hawkeye CLI — AI SRE Platform
+
+Hawkeye is an AI-powered SRE platform that investigates incidents autonomously.
+The ` + "`hawkeye`" + ` CLI is installed and authenticated on this machine.
+
+## Command Reference
+
+` + "```" + `
+` + "`!`hawkeye help`" + `
+` + "```" + `
+
+## Workflows
+
+### 1. Investigate an Incident
+
+` + "```bash" + `
+# Free-form investigation (creates a new session, streams RCA)
+hawkeye investigate "Why is the API returning 500 errors since 2pm?"
+
+# Continue a previous session with a follow-up question
+hawkeye investigate "What about the database connections?" --session <uuid>
+
+# Investigate from a monitoring alert (PagerDuty, Datadog, etc.)
+hawkeye investigate-alert <alert-id>
+` + "```" + `
+
+### 2. Review Sessions & RCA
+
+` + "```bash" + `
+# List recent investigations
+hawkeye sessions
+hawkeye sessions --status investigated --from 2025-01-01
+
+# Inspect full chain-of-thought and sources
+hawkeye inspect <session-uuid>
+
+# Executive summary
+hawkeye summary <session-uuid>
+
+# RCA quality score
+hawkeye score <session-uuid>
+
+# Open in web console
+hawkeye link <session-uuid>
+` + "```" + `
+
+### 3. Triage Uninvestigated Alerts
+
+` + "```bash" + `
+# List alerts that haven't been investigated yet
+hawkeye sessions --uninvestigated
+
+# Investigate one
+hawkeye investigate-alert <alert-id>
+` + "```" + `
+
+### 4. Analytics & Reporting
+
+` + "```bash" + `
+# Org-wide incident analytics (MTTR, time saved, noise reduction)
+hawkeye report
+
+# Per-session report with time-saved metrics
+hawkeye session-report <uuid> [<uuid>...]
+` + "```" + `
+
+### 5. Manage Connections
+
+` + "```bash" + `
+# List data source connections
+hawkeye connections
+
+# Connection details and resources
+hawkeye connections info <conn-uuid>
+hawkeye connections resources <conn-uuid>
+
+# Create and add to project
+hawkeye connections create <type> <name> --api-key <key>
+hawkeye connections sync <conn-uuid>
+hawkeye connections add <conn-uuid>
+` + "```" + `
+
+### 6. Configure Instructions
+
+` + "```bash" + `
+# List current project instructions
+hawkeye instructions
+
+# Create a new instruction
+hawkeye instructions create "Check CloudWatch first" --type system --content "Always check CloudWatch logs before other sources"
+
+# Validate before creating
+hawkeye instructions validate --type filter --content "Ignore alerts with priority P5"
+
+# Test on an existing session
+hawkeye instructions apply <session-uuid> --type system --content "Focus on database queries"
+hawkeye rerun <session-uuid>
+` + "```" + `
+
+## Tips
+
+- **` + "`--json`" + ` flag**: Add ` + "`-j`" + ` or ` + "`--json`" + ` to any command for machine-readable JSON output.
+  Example: ` + "`hawkeye sessions -j | jq '.[].session_uuid'`" + `
+- **Profiles**: Use ` + "`--profile <name>`" + ` to switch between environments (staging, prod).
+  Example: ` + "`hawkeye --profile staging sessions`" + `
+- **Last session**: Commands like ` + "`inspect`" + `, ` + "`summary`" + `, ` + "`score`" + ` default to the last session if no UUID is given.
+- **Error handling**: If a command fails with an auth error, re-run ` + "`hawkeye login <url> -u <user> -p <pass>`" + `.
+- **Interactive mode**: Run ` + "`hawkeye`" + ` with no arguments for a TUI with slash commands.
+
+## Key Concepts
+
+- **Session**: A single investigation thread. Created by ` + "`investigate`" + ` or ` + "`investigate-alert`" + `.
+- **Chain of Thought (CoT)**: The step-by-step reasoning Hawkeye follows during an investigation.
+- **Instruction**: Rules that control what/how Hawkeye investigates (filter, system, grouping, rca).
+- **Connection**: A data source integration (AWS, Datadog, PagerDuty, Splunk, etc.).
+- **Project**: A container grouping connections, instructions, and sessions.
+`
+
+func cmdSetupClaude(args []string) error {
+	for _, a := range args {
+		if a == "--uninstall" {
+			return uninstallClaudeSkill()
+		}
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	skillDir := filepath.Join(homeDir, ".claude", "skills", "hawkeye")
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+
+	_, statErr := os.Stat(skillFile)
+	updating := statErr == nil
+
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return fmt.Errorf("creating skill directory: %w", err)
+	}
+
+	if err := os.WriteFile(skillFile, []byte(claudeSkillContent), 0644); err != nil {
+		return fmt.Errorf("writing skill file: %w", err)
+	}
+
+	if updating {
+		display.Success(fmt.Sprintf("Claude Code skill updated: %s", skillFile))
+	} else {
+		display.Success(fmt.Sprintf("Claude Code skill installed: %s", skillFile))
+	}
+
+	fmt.Printf("\n  %sClaude Code will now auto-invoke Hawkeye for SRE tasks.%s\n", display.Dim, display.Reset)
+	fmt.Printf("  %sTry:%s Ask Claude to %s\"investigate why the API is slow\"%s\n\n", display.Dim, display.Reset, display.Cyan, display.Reset)
+
+	return nil
+}
+
+func uninstallClaudeSkill() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	skillDir := filepath.Join(homeDir, ".claude", "skills", "hawkeye")
+
+	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
+		display.Info("Nothing to remove:", "Claude Code skill is not installed")
+		return nil
+	}
+
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("removing skill directory: %w", err)
+	}
+
+	display.Success("Claude Code skill uninstalled")
+	return nil
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 func printJSON(v any) error {
@@ -2488,6 +2683,10 @@ func printUsage() {
 %sProfiles:%s
   profiles                    List all config profiles
 
+%sIntegrations:%s
+  setup-claude                Install Hawkeye skill for Claude Code
+    --uninstall               Remove the skill
+
 %sExamples:%s
   hawkeye                                            # Start interactive mode
   hawkeye login https://myenv.app.neubird.ai/ -u admin@company.com -p secret
@@ -2518,5 +2717,6 @@ func printUsage() {
 		display.Cyan, display.Reset, // Discovery & Reports
 		display.Cyan, display.Reset, // Library
 		display.Cyan, display.Reset, // Profiles
+		display.Cyan, display.Reset, // Integrations
 		display.Cyan, display.Reset) // Examples
 }
