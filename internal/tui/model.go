@@ -463,7 +463,7 @@ func (m model) View() string {
 			status = ps
 		}
 		// Add blank lines to prevent spinner from overwriting last printed content
-		s.WriteString("\n\n\n\n")
+		s.WriteString("\n\n")
 		s.WriteString(m.spinner.View() + " " + statusStyle.Render(status))
 	} else {
 		s.WriteString(m.input.View())
