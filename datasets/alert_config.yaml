@@ -1,0 +1,534 @@
+# Incident test dataset for PagerDuty / FireHydrant / incident.io
+#
+# Incidents are realistic for an e-commerce/shopping production environment.
+# Tags follow observability conventions: env:prod, service:x, team:x, region:x.
+
+incidents:
+
+  - id: INC-001
+    title: "RDS CPU utilization sustained above 80% — conf-db cluster degraded"
+    severity: high
+    description: >
+      The monarch-conf RDS cluster has sustained CPU utilization above 80% for over 20 minutes.
+      The cluster serves the configuration service which gates all feature flag evaluations and
+      routing decisions. Slow queries on the config_entries table are the primary driver;
+      a missing index on (tenant_id, updated_at) was introduced in last night's migration.
+      Read replica lag is climbing and connection pool exhaustion is imminent.
+    service: configuration-service
+    environment: production
+    team: platform-engineering
+    tags:
+      - env:prod
+      - service:configuration-service
+      - team:platform-engineering
+      - region:us-east-1
+      - rds
+      - cpu-high
+      - slow-query
+      - p1
+    pagerduty:
+      severity: error
+      source: signalfx/rds-cpu-monitor
+      component: monarch-conf-rds
+      group: platform-engineering
+      custom_details:
+        detector_name: "RDS CPU utilization is high"
+        detect_label: "80% RDS CPU threshold reached over 20m"
+        db_cluster: monarch-conf-prod-us-mc-14-001
+        cpu_pct: 100
+        duration_minutes: 20
+        root_cause: missing index on config_entries(tenant_id, updated_at)
+        replica_lag_seconds: 14
+    firehydrant:
+      severity: SEV2
+      labels:
+        - env:prod
+        - rds
+        - cpu-high
+      affected_services:
+        - configuration-service
+        - feature-flag-service
+        - api-gateway
+    incidentio:
+      severity: high
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/rds-cpu-high"
+
+  - id: INC-002
+    title: "Saved cart sync failure — guest checkout sessions not persisting on mobile"
+    severity: high
+    description: >
+      Guest checkout sessions on iOS are returning HTTP 500 from the cart-sync-gateway service.
+      Calls to persist saved cart state are timing out at 28 seconds (limit 30s).
+      The session signing key used to seal cart payloads was rotated in the last deployment
+      but the new key was not propagated to the cart-sync-gateway secret store. Android app
+      cart persistence is unaffected. Logged-in user carts are still saving correctly.
+    service: cart-sync-gateway
+    environment: production
+    team: mobile-platform
+    tags:
+      - env:prod
+      - service:cart-sync-gateway
+      - team:mobile-platform
+      - region:us-east-1
+      - ios
+      - cart-sync
+      - session-persistence
+      - cert-mismatch
+      - p1
+    pagerduty:
+      severity: error
+      source: datadog/cart-sync-gateway
+      component: guest-cart-session-sync
+      group: mobile-platform
+      custom_details:
+        error_rate_pct: 100
+        http_status: 500
+        sync_api_timeout_seconds: 28
+        android_cart_status: healthy
+        root_cause: session signing key not propagated to secret store
+        affected_app_versions:
+          - "7.24.0"
+          - "7.23.5"
+    firehydrant:
+      severity: SEV2
+      labels:
+        - env:prod
+        - ios
+        - cart-sync
+        - session-persistence
+      affected_services:
+        - cart-sync-gateway
+        - session-store-api
+        - guest-checkout-service
+    incidentio:
+      severity: high
+      mode: real
+      custom_fields:
+        affected_region: global
+        runbook: "https://wiki.internal/runbooks/cart-sync-failure"
+
+  - id: INC-003
+    title: "Airflow DAG timeout: daily order reconciliation blocked on upstream sensor"
+    severity: medium
+    description: >
+      The daily_order_reconciliation DAG failed to complete within the 6-hour SLA window.
+      The wait_for_order_export ExternalTaskSensor timed out after 4 hours because the
+      upstream order_export DAG was delayed by a Redshift WLM queue slot shortage.
+      Downstream partner fulfillment reports will be generated late. Logistics team has been notified.
+      No data loss; reprocessing is safe once the upstream DAG completes.
+    service: airflow-order-reconciliation
+    environment: production
+    team: data-engineering
+    tags:
+      - env:prod
+      - service:airflow-order-reconciliation
+      - team:data-engineering
+      - region:us-east-1
+      - airflow
+      - dag-timeout
+      - redshift
+      - fulfillment
+      - p2
+    pagerduty:
+      severity: warning
+      source: datadog/airflow-monitor
+      component: daily_order_reconciliation-dag
+      group: data-engineering
+      custom_details:
+        dag_id: daily_order_reconciliation
+        failed_task: wait_for_order_export
+        failure_reason: ExternalTaskSensor timeout after 4h
+        upstream_dag: order_export
+        upstream_blocker: Redshift WLM queue slot shortage
+        sla_window_hours: 6
+        impact: partner fulfillment reports delayed
+    firehydrant:
+      severity: SEV3
+      labels:
+        - env:prod
+        - airflow
+        - etl
+        - fulfillment
+      affected_services:
+        - airflow-order-reconciliation
+        - partner-fulfillment-service
+        - logistics-reporting
+    incidentio:
+      severity: medium
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/airflow-dag-failure"
+
+  - id: INC-004
+    title: "ECS parser service OOM: message queue backing up after task eviction"
+    severity: high
+    description: >
+      Four ECS tasks running the event-parser service were OOM-killed within a 15-minute window.
+      A burst of 180,000 raw order events arrived from a bulk product catalogue import job that was
+      released without rate limiting. Each task was allocated 2 GiB; peak heap reached 1.9 GiB
+      before eviction. The ingest SQS queue has grown to 65,000 unprocessed messages. Downstream
+      enrichment and order posting are stalled.
+    service: event-parser
+    environment: production
+    team: data-platform
+    tags:
+      - env:prod
+      - service:event-parser
+      - team:data-platform
+      - region:us-east-1
+      - ecs
+      - oom
+      - sqs
+      - batch-ingest
+      - p1
+    pagerduty:
+      severity: error
+      source: cloudwatch/event-parser-ecs
+      component: event-parser-ecs-task
+      group: data-platform
+      custom_details:
+        tasks_killed: 4
+        task_memory_limit_gib: 2
+        peak_heap_gib: 1.9
+        queue_name: prod-event-parser-ingest
+        queue_depth: 65000
+        trigger_event: bulk product catalogue import 180k records
+    firehydrant:
+      severity: SEV2
+      labels:
+        - env:prod
+        - ecs
+        - oom
+        - data-pipeline
+      affected_services:
+        - event-parser
+        - order-posting-service
+        - order-enrichment
+    incidentio:
+      severity: high
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/ecs-oom-kill"
+
+  - id: INC-005
+    title: "Redshift WLM slot exhaustion — analytics queries queued for 45+ minutes"
+    severity: medium
+    description: >
+      The production Redshift cluster (prod-rs-ra3-xlplus) has no available WLM slots in the
+      reporting queue. 14 long-running queries from the sales_reporting DAG have occupied all
+      slots for the past 45 minutes. New queries from the BI dashboards and partner reconciliation
+      are waiting in queue. The root cause is an unoptimized cross-join introduced in the
+      monthly_sales_summary query following a schema change.
+    service: redshift-analytics
+    environment: production
+    team: data-engineering
+    tags:
+      - env:prod
+      - service:redshift-analytics
+      - team:data-engineering
+      - region:us-east-1
+      - redshift
+      - wlm
+      - slow-query
+      - analytics
+      - p2
+    pagerduty:
+      severity: warning
+      source: cloudwatch/prod-rs-ra3-xlplus
+      component: redshift-wlm
+      group: data-engineering
+      custom_details:
+        cluster_id: prod-rs-ra3-xlplus
+        queue: reporting
+        slots_available: 0
+        slots_total: 5
+        queued_queries: 14
+        longest_running_minutes: 45
+        bad_query: monthly_sales_summary
+        root_cause: unoptimized cross-join post schema change
+    firehydrant:
+      severity: SEV3
+      labels:
+        - env:prod
+        - redshift
+        - analytics
+        - slow-query
+      affected_services:
+        - redshift-analytics
+        - sales-reporting-dag
+        - bi-dashboards
+    incidentio:
+      severity: medium
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/redshift-wlm-exhaustion"
+
+  - id: INC-006
+    title: "Checkout API error rate spike: 12% of POST /v1/checkout/submit returning 502"
+    severity: critical
+    description: >
+      12% of POST /v1/checkout/submit requests are returning HTTP 502 over the past 8 minutes.
+      The checkout-service is failing to reach the downstream order-fulfillment-gateway.
+      Traces show TCP connection timeouts on port 8443 to the gateway's load balancer.
+      A security group rule change deployed 11 minutes ago inadvertently removed the egress
+      rule for the order-fulfillment-gateway VPC endpoint. Orders are not being double-submitted
+      as the write is failing pre-commit.
+    service: checkout-service
+    environment: production
+    team: commerce-platform
+    tags:
+      - env:prod
+      - service:checkout-service
+      - team:commerce-platform
+      - region:us-east-1
+      - checkout
+      - error-rate
+      - network
+      - security-group
+      - p0
+    pagerduty:
+      severity: critical
+      source: datadog/checkout-service
+      component: order-fulfillment-gateway-egress
+      group: commerce-platform
+      custom_details:
+        error_rate_pct: 12
+        http_status: 502
+        error_type: TCP connection timeout
+        gateway_endpoint_port: 8443
+        root_cause: security group egress rule removed in deploy 11 min ago
+        order_double_submit_risk: none
+    firehydrant:
+      severity: SEV1
+      labels:
+        - env:prod
+        - checkout
+        - error-rate
+        - network
+      affected_services:
+        - checkout-service
+        - order-fulfillment-gateway
+        - cart-api
+    incidentio:
+      severity: critical
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/checkout-api-errors"
+
+  - id: INC-007
+    title: "Aurora replica lag at 38s — read traffic failing over to primary"
+    severity: high
+    description: >
+      The Aurora read replica for the cart database (cart-prod-cluster-ro) has fallen
+      38 seconds behind the primary. The replica serves all read traffic for the cart-service.
+      The client library's replica health check has marked it unavailable and is routing all reads
+      to the primary, which is now at 94% CPU. The lag spike correlates with a bulk cart
+      expiry job that executed a table-wide UPDATE without chunking at 14:32 UTC.
+    service: cart-service
+    environment: production
+    team: commerce-platform
+    tags:
+      - env:prod
+      - service:cart-service
+      - team:commerce-platform
+      - region:us-east-1
+      - aurora
+      - replica-lag
+      - rds
+      - bulk-update
+      - p1
+    pagerduty:
+      severity: error
+      source: cloudwatch/cart-prod-cluster-ro
+      component: aurora-read-replica
+      group: commerce-platform
+      custom_details:
+        cluster_id: cart-prod-cluster-ro
+        replica_lag_seconds: 38
+        primary_cpu_pct: 94
+        root_cause: unchunked bulk UPDATE on cart table
+        job_started_utc: "14:32"
+        reads_rerouted_to_primary: true
+    firehydrant:
+      severity: SEV2
+      labels:
+        - env:prod
+        - aurora
+        - replica-lag
+        - commerce-platform
+      affected_services:
+        - cart-service
+        - cart-prod-cluster-ro
+        - cart-inquiry-api
+    incidentio:
+      severity: high
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/aurora-replica-lag"
+
+  - id: INC-008
+    title: "EC2 host CPU saturation: core-connect service degraded in us-west-2a"
+    severity: medium
+    description: >
+      CPU utilization on the core-connect EC2 host (production-core-alpha ASG, us-west-2a)
+      has been sustained above 90% for 15 minutes. The Dynatrace custom alert threshold is 80%.
+      A memory leak in the connection pool manager is causing excessive GC cycles. The host
+      is processing 40% more goroutines than the cluster average. Auto-scaling has added one
+      additional task but the problem host has not yet recovered. No user-facing errors yet.
+    service: core-connect
+    environment: production
+    team: infrastructure
+    tags:
+      - env:prod
+      - service:core-connect
+      - team:infrastructure
+      - region:us-west-2
+      - ec2
+      - cpu-high
+      - memory-leak
+      - autoscaling
+      - p2
+    pagerduty:
+      severity: warning
+      source: dynatrace/production_services_cpu_usage
+      component: core-connect-ec2
+      group: infrastructure
+      custom_details:
+        host_name: ip-10.0.85.241-production-core-alpha-connect-us-west-2a
+        asg_name: production-core-alpha-Asg
+        availability_zone: us-west-2a
+        cpu_pct: 92
+        threshold_pct: 80
+        duration_minutes: 15
+        goroutine_count_vs_avg_pct: 140
+        root_cause: suspected memory leak in connection pool manager
+    firehydrant:
+      severity: SEV3
+      labels:
+        - env:prod
+        - ec2
+        - cpu-high
+        - infrastructure
+      affected_services:
+        - core-connect
+        - production-core-alpha-asg
+    incidentio:
+      severity: medium
+      mode: real
+      custom_fields:
+        affected_region: us-west-2
+        runbook: "https://wiki.internal/runbooks/ec2-cpu-saturation"
+
+  - id: INC-009
+    title: "SQS dead-letter queue surge: order-events DLQ at 9,200 messages"
+    severity: high
+    description: >
+      The order-events dead-letter queue (prod-order-events-dlq) has surged to
+      9,200 messages in the past 30 minutes, up from a baseline of ~50. Messages are failing
+      deserialization due to an undocumented schema change in the order event producer
+      that shipped in v3.1.0 deployed at 09:15 UTC. The message consumer is retrying 3 times
+      before DLQ routing. No orders are lost but they require manual replay.
+    service: order-event-consumer
+    environment: production
+    team: commerce-platform
+    tags:
+      - env:prod
+      - service:order-event-consumer
+      - team:commerce-platform
+      - region:us-east-1
+      - sqs
+      - dlq
+      - schema-change
+      - deserialization
+      - p1
+    pagerduty:
+      severity: error
+      source: cloudwatch/prod-order-events-dlq
+      component: order-event-consumer
+      group: commerce-platform
+      custom_details:
+        dlq_name: prod-order-events-dlq
+        dlq_depth: 9200
+        dlq_baseline: 50
+        root_cause: undocumented schema change in producer v3.1.0
+        producer_deploy_time: "09:15 UTC"
+        retry_count_before_dlq: 3
+        recovery: manual replay required
+    firehydrant:
+      severity: SEV2
+      labels:
+        - env:prod
+        - sqs
+        - dlq
+        - checkout
+      affected_services:
+        - order-event-consumer
+        - order-event-producer
+        - order-processing-service
+    incidentio:
+      severity: high
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/sqs-dlq-surge"
+
+  - id: INC-010
+    title: "API gateway latency P99 at 6.8s — auth token validation bottleneck"
+    severity: critical
+    description: >
+      P99 latency at the API gateway has exceeded 6.8 seconds (SLO: 500 ms) for the past
+      6 minutes. All authenticated endpoints are affected. Traces point to the token-validation
+      middleware which calls the auth-service for every request due to a misconfigured local
+      cache TTL of 0 seconds set in the previous deployment. The auth-service is handling
+      18,000 RPS vs a normal 1,200 RPS. Error budget burn rate is 22x.
+    service: api-gateway
+    environment: production
+    team: platform-engineering
+    tags:
+      - env:prod
+      - service:api-gateway
+      - team:platform-engineering
+      - region:us-east-1
+      - latency
+      - slo-breach
+      - auth
+      - cache-misconfiguration
+      - p0
+    pagerduty:
+      severity: critical
+      source: datadog/api-gateway
+      component: token-validation-middleware
+      group: platform-engineering
+      custom_details:
+        p99_latency_ms: 6800
+        slo_target_ms: 500
+        burn_rate_multiplier: 22
+        auth_service_rps_current: 18000
+        auth_service_rps_normal: 1200
+        root_cause: token cache TTL set to 0 in last deploy
+        all_authenticated_endpoints_affected: true
+    firehydrant:
+      severity: SEV1
+      labels:
+        - env:prod
+        - latency
+        - slo-breach
+        - auth
+      affected_services:
+        - api-gateway
+        - auth-service
+        - token-validation
+    incidentio:
+      severity: critical
+      mode: real
+      custom_fields:
+        affected_region: us-east-1
+        runbook: "https://wiki.internal/runbooks/api-gateway-latency"

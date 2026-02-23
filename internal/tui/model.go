@@ -45,6 +45,9 @@ var slashCommands = []slashCmd{
 	{"/incidents add pagerduty", "Add a PagerDuty connection (--name, --api-key)"},
 	{"/incidents add firehydrant", "Add a FireHydrant connection (--name, --api-key)"},
 	{"/incidents add incidentio", "Add an incident.io connection (--name, --api-key)"},
+	{"/incidents test pagerduty", "Test PagerDuty incidents (--api-key, --routing-key, --file, --run-level)"},
+	{"/incidents test firehydrant", "Test FireHydrant incidents (--api-key, --file, --run-level)"},
+	{"/incidents test incidentio", "Test incident.io incidents (--api-key, --file, --run-level)"},
 	{"/inspect", "View session details"},
 	{"/instructions", "Manage project instructions"},
 	{"/investigate-alert", "Investigate an alert"},
@@ -453,6 +456,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case addConnectionResultMsg:
 		return m.handleAddConnectionResult(msg)
+
+	case incidentTestResultMsg:
+		return m.handleIncidentTestResult(msg)
 	}
 
 	// Update sub-components

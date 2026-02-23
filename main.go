@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,9 +11,17 @@ import (
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
 	"hawkeye-cli/internal/display"
+	"hawkeye-cli/internal/incidents"
 	"hawkeye-cli/internal/service"
 	"hawkeye-cli/internal/tui"
 )
+
+//go:embed datasets/alert_config.yaml
+var defaultIncidentDataset []byte
+
+func init() {
+	incidents.DefaultDataset = defaultIncidentDataset
+}
 
 var version = "0.1.0"
 
@@ -96,6 +105,8 @@ func main() {
 		err = cmdInstructions(args[1:])
 	case "rerun":
 		err = cmdRerun(args[1:])
+	case "incidents":
+		err = cmdIncidents(args[1:])
 	case "profiles":
 		err = cmdProfiles()
 	case "help", "--help", "-h":
@@ -2285,6 +2296,313 @@ func cmdRerun(args []string) error {
 	if resp.SessionUUID != "" && resp.SessionUUID != sessionUUID {
 		display.Info("New session:", resp.SessionUUID)
 	}
+	return nil
+}
+
+// ─── incidents ───────────────────────────────────────────────────────────────
+
+func cmdIncidents(args []string) error {
+	cfg, err := config.Load(activeProfile)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ValidateProject(); err != nil {
+		return err
+	}
+
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye incidents add <type> [flags]")
+		fmt.Println("       hawkeye incidents test <type> [flags]")
+		fmt.Println("Types: pagerduty, firehydrant, incidentio")
+		return nil
+	}
+
+	if args[0] == "add" {
+		if len(args) < 2 {
+			fmt.Println("Usage: hawkeye incidents add <type> [flags]")
+			fmt.Println("Types: pagerduty, firehydrant, incidentio")
+			return nil
+		}
+		switch args[1] {
+		case "pagerduty":
+			return cmdConnectionAddPagerDuty(cfg, args[2:])
+		case "firehydrant":
+			return cmdConnectionAddFirehydrant(cfg, args[2:])
+		case "incidentio":
+			return cmdConnectionAddIncidentio(cfg, args[2:])
+		default:
+			fmt.Printf("Unknown type %q. Types: pagerduty, firehydrant, incidentio\n", args[1])
+			return nil
+		}
+	}
+
+	if args[0] == "test" {
+		if len(args) < 2 {
+			fmt.Println("Usage: hawkeye incidents test <type> [--api-key <key>] [--routing-key <key>] [--file <path>] [--run-level <n>]")
+			fmt.Println("Types: pagerduty, firehydrant, incidentio")
+			return nil
+		}
+		return cmdIncidentsTest(args[1:])
+	}
+
+	fmt.Printf("Unknown subcommand %q. Try: hawkeye incidents add | test\n", args[0])
+	return nil
+}
+
+func cmdIncidentsTest(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye incidents test <type> [--api-key <key>] [--routing-key <key>] [--file <path>] [--run-level <n>]")
+		fmt.Println("Types: pagerduty, firehydrant, incidentio")
+		return nil
+	}
+	providerType := args[0]
+	args = args[1:]
+
+	var apiKey, routingKey, filename string
+	runLevel := 0
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--api-key":
+			if i+1 < len(args) {
+				i++
+				apiKey = args[i]
+			} else {
+				return fmt.Errorf("--api-key requires a value")
+			}
+		case "--routing-key":
+			if i+1 < len(args) {
+				i++
+				routingKey = args[i]
+			} else {
+				return fmt.Errorf("--routing-key requires a value")
+			}
+		case "--file":
+			if i+1 < len(args) {
+				i++
+				filename = args[i]
+			} else {
+				return fmt.Errorf("--file requires a value")
+			}
+		case "--run-level":
+			if i+1 < len(args) {
+				i++
+				n, err := strconv.Atoi(args[i])
+				if err != nil {
+					return fmt.Errorf("--run-level must be an integer")
+				}
+				runLevel = n
+			} else {
+				return fmt.Errorf("--run-level requires a value")
+			}
+		}
+	}
+
+	if apiKey == "" && routingKey == "" {
+		return fmt.Errorf("--api-key is required (use --routing-key for PagerDuty Events API)")
+	}
+	if filename == "" {
+		home, _ := os.UserHomeDir()
+		candidate := home + "/.hawkeye/test_config"
+		if _, err := os.Stat(candidate); err == nil {
+			filename = candidate
+		}
+	}
+	if runLevel == 0 {
+		runLevel = 1
+	}
+
+	creds := incidents.Creds{
+		ApiKey:     apiKey,
+		RoutingKey: routingKey,
+	}
+
+	created, err := incidents.RunTest(providerType, creds, filename, incidents.IncidentInput{Count: runLevel})
+	if err != nil {
+		return fmt.Errorf("incidents test: %w", err)
+	}
+
+	fmt.Printf("\nCreated %d incident(s) via %s:\n\n", len(created), providerType)
+	for _, inc := range created {
+		fmt.Printf("  %-10s %s\n", "source:", inc.SourceID)
+		fmt.Printf("  %-10s %s\n", "remote:", inc.RemoteID)
+		fmt.Printf("  %-10s %s\n", "title:", inc.Title)
+		if inc.URL != "" {
+			fmt.Printf("  %-10s %s\n", "url:", inc.URL)
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+func cmdConnectionAddPagerDuty(cfg *config.Config, args []string) error {
+	var name, apiKey string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				i++
+				name = args[i]
+			} else {
+				return fmt.Errorf("--name requires a value")
+			}
+		case "--api-key":
+			if i+1 < len(args) {
+				i++
+				apiKey = args[i]
+			} else {
+				return fmt.Errorf("--api-key requires a value")
+			}
+		}
+	}
+
+	if name == "" {
+		fmt.Print("Connection name: ")
+		fmt.Scanln(&name)
+	}
+	if apiKey == "" {
+		fmt.Print("PagerDuty API access key: ")
+		fmt.Scanln(&apiKey)
+	}
+	if name == "" || apiKey == "" {
+		return fmt.Errorf("name and api-key are required")
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.AddConnection(&api.AddConnectionRequest{
+		Connection: api.AddConnectionInput{
+			Name:           name,
+			ConnectionType: "CONNECTION_TYPE_PAGERDUTY",
+			PagerdutyConnectionInfo: &api.PagerdutyConnectionInfo{
+				ApiAccessKey: apiKey,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("adding connection: %w", err)
+	}
+	if resp.Response.ErrorMessage != "" {
+		return fmt.Errorf("server error: %s", resp.Response.ErrorMessage)
+	}
+
+	display.Header("PagerDuty Connection Added")
+	fmt.Printf("\n  %s%s%s\n", display.Bold, name, display.Reset)
+	fmt.Printf("    %sUUID:%s  %s\n\n", display.Dim, display.Reset, resp.Response.UUID)
+	return nil
+}
+
+func cmdConnectionAddFirehydrant(cfg *config.Config, args []string) error {
+	var name, apiKey string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				i++
+				name = args[i]
+			} else {
+				return fmt.Errorf("--name requires a value")
+			}
+		case "--api-key":
+			if i+1 < len(args) {
+				i++
+				apiKey = args[i]
+			} else {
+				return fmt.Errorf("--api-key requires a value")
+			}
+		}
+	}
+
+	if name == "" {
+		fmt.Print("Connection name: ")
+		fmt.Scanln(&name)
+	}
+	if apiKey == "" {
+		fmt.Print("FireHydrant API key: ")
+		fmt.Scanln(&apiKey)
+	}
+	if name == "" || apiKey == "" {
+		return fmt.Errorf("name and api-key are required")
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.AddConnection(&api.AddConnectionRequest{
+		Connection: api.AddConnectionInput{
+			Name:           name,
+			ConnectionType: "CONNECTION_TYPE_FIREHYDRANT",
+			FirehydrantConnectionInfo: &api.FirehydrantConnectionInfo{
+				ApiKey: apiKey,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("adding connection: %w", err)
+	}
+	if resp.Response.ErrorMessage != "" {
+		return fmt.Errorf("server error: %s", resp.Response.ErrorMessage)
+	}
+
+	display.Header("FireHydrant Connection Added")
+	fmt.Printf("\n  %s%s%s\n", display.Bold, name, display.Reset)
+	fmt.Printf("    %sUUID:%s  %s\n\n", display.Dim, display.Reset, resp.Response.UUID)
+	return nil
+}
+
+func cmdConnectionAddIncidentio(cfg *config.Config, args []string) error {
+	var name, apiKey string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				i++
+				name = args[i]
+			} else {
+				return fmt.Errorf("--name requires a value")
+			}
+		case "--api-key":
+			if i+1 < len(args) {
+				i++
+				apiKey = args[i]
+			} else {
+				return fmt.Errorf("--api-key requires a value")
+			}
+		}
+	}
+
+	if name == "" {
+		fmt.Print("Connection name: ")
+		fmt.Scanln(&name)
+	}
+	if apiKey == "" {
+		fmt.Print("incident.io API key: ")
+		fmt.Scanln(&apiKey)
+	}
+	if name == "" || apiKey == "" {
+		return fmt.Errorf("name and api-key are required")
+	}
+
+	client := api.NewClient(cfg)
+	resp, err := client.AddConnection(&api.AddConnectionRequest{
+		Connection: api.AddConnectionInput{
+			Name:           name,
+			ConnectionType: "CONNECTION_TYPE_INCIDENTIO",
+			IncidentioConnectionInfo: &api.IncidentioConnectionInfo{
+				ApiKey: apiKey,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("adding connection: %w", err)
+	}
+	if resp.Response.ErrorMessage != "" {
+		return fmt.Errorf("server error: %s", resp.Response.ErrorMessage)
+	}
+
+	display.Header("incident.io Connection Added")
+	fmt.Printf("\n  %s%s%s\n", display.Bold, name, display.Reset)
+	fmt.Printf("    %sUUID:%s  %s\n\n", display.Dim, display.Reset, resp.Response.UUID)
 	return nil
 }
 
