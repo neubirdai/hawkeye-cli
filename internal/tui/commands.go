@@ -2063,19 +2063,23 @@ func (m model) cmdIncidents(args []string) (tea.Model, tea.Cmd) {
 			tea.Println(""),
 			tea.Println(dimStyle.Render("  /incidents subcommands:")),
 			tea.Println(""),
-			tea.Println("  "+pad(hintKeyStyle.Render("add pagerduty"), 30)+dimStyle.Render("Add a PagerDuty connection (--name, --api-key)")),
-			tea.Println("  "+pad(hintKeyStyle.Render("add firehydrant"), 30)+dimStyle.Render("Add a FireHydrant connection (--name, --api-key)")),
-			tea.Println("  "+pad(hintKeyStyle.Render("add incidentio"), 30)+dimStyle.Render("Add an incident.io connection (--name, --api-key)")),
-			tea.Println("  "+pad(hintKeyStyle.Render("test pagerduty"), 30)+dimStyle.Render("Test PagerDuty incidents (--api-key or --routing-key; --file, --run-level optional)")),
-			tea.Println("  "+pad(hintKeyStyle.Render("test firehydrant"), 30)+dimStyle.Render("Test FireHydrant incidents (--api-key; --file, --run-level optional)")),
-			tea.Println("  "+pad(hintKeyStyle.Render("test incidentio"), 30)+dimStyle.Render("Test incident.io incidents (--api-key; --file, --run-level optional)")),
+			tea.Println("  "+pad(hintKeyStyle.Render("add"), 30)+dimStyle.Render("Add an incident management connection")),
+			tea.Println("  "+pad(hintKeyStyle.Render("test"), 30)+dimStyle.Render("Test incident creation")),
 			tea.Println(""),
 		)
 	}
 
 	if args[0] == "add" {
 		if len(args) < 2 {
-			return m, tea.Println(warnMsgStyle.Render("  ! Usage: /incidents add <type> --name <name> --api-key <key>  (types: pagerduty, firehydrant, incidentio)"))
+			return m, tea.Sequence(
+				tea.Println(""),
+				tea.Println(dimStyle.Render("  /incidents add <type>:")),
+				tea.Println(""),
+				tea.Println("  "+pad(hintKeyStyle.Render("add pagerduty"), 30)+dimStyle.Render("Add a PagerDuty connection (--name, --api-key)")),
+				tea.Println("  "+pad(hintKeyStyle.Render("add firehydrant"), 30)+dimStyle.Render("Add a FireHydrant connection (--name, --api-key)")),
+				tea.Println("  "+pad(hintKeyStyle.Render("add incidentio"), 30)+dimStyle.Render("Add an incident.io connection (--name, --api-key)")),
+				tea.Println(""),
+			)
 		}
 		switch args[1] {
 		case "pagerduty":
@@ -2091,7 +2095,15 @@ func (m model) cmdIncidents(args []string) (tea.Model, tea.Cmd) {
 
 	if args[0] == "test" {
 		if len(args) < 2 {
-			return m, tea.Println(warnMsgStyle.Render("  ! Usage: /incidents test <type> --api-key <key> [--run-level <n>]  (types: pagerduty, firehydrant, incidentio)"))
+			return m, tea.Sequence(
+				tea.Println(""),
+				tea.Println(dimStyle.Render("  /incidents test <type>:")),
+				tea.Println(""),
+				tea.Println("  "+pad(hintKeyStyle.Render("test pagerduty"), 30)+dimStyle.Render("Test PagerDuty incidents (--api-key or --routing-key; --file, --run-level optional)")),
+				tea.Println("  "+pad(hintKeyStyle.Render("test firehydrant"), 30)+dimStyle.Render("Test FireHydrant incidents (--api-key; --file, --run-level optional)")),
+				tea.Println("  "+pad(hintKeyStyle.Render("test incidentio"), 30)+dimStyle.Render("Test incident.io incidents (--api-key; --file, --run-level optional)")),
+				tea.Println(""),
+			)
 		}
 		switch args[1] {
 		case "pagerduty", "firehydrant", "incidentio":
