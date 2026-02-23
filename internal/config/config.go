@@ -18,6 +18,7 @@ type Config struct {
 	Token       string `json:"token,omitempty"`
 	OrgUUID     string `json:"org_uuid,omitempty"`
 	ProjectID   string `json:"project_uuid,omitempty"`
+	ProjectName string `json:"project_name,omitempty"`
 	LastSession string `json:"last_session,omitempty"`
 	Profile     string `json:"-"`
 }

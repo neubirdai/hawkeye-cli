@@ -755,31 +755,21 @@ func (m model) handleProjectsLoaded(msg projectsLoadedMsg) (tea.Model, tea.Cmd) 
 		return m, tea.Println(warnMsgStyle.Render("  ! No projects found."))
 	}
 
-	var cmds []tea.Cmd
-	cmds = append(cmds,
-		tea.Println(""),
-		tea.Println(fmt.Sprintf("  Projects (%d):", len(msg.projects))),
-		tea.Println(""),
-	)
-
-	for _, p := range msg.projects {
-		ready := successMsgStyle.Render("ready")
-		if !p.Ready {
-			ready = warnMsgStyle.Render("not ready")
+	// Find current project index to pre-select it
+	selectedIdx := 0
+	for i, p := range msg.projects {
+		if p.UUID == m.cfg.ProjectID {
+			selectedIdx = i
+			break
 		}
-		cmds = append(cmds,
-			tea.Println(fmt.Sprintf("  ⏺ %s  %s", p.Name, ready)),
-			tea.Println(fmt.Sprintf("    %s", p.UUID)),
-		)
 	}
 
-	cmds = append(cmds,
-		tea.Println(""),
-		tea.Println(dimStyle.Render("  Use /set project <uuid> to select a project")),
-		tea.Println(""),
-	)
+	// Enter interactive project selection mode
+	m.mode = modeProjectSelect
+	m.projectList = msg.projects
+	m.projectListIdx = selectedIdx
 
-	return m, tea.Sequence(cmds...)
+	return m, nil
 }
 
 // ─── /projects info ──────────────────────────────────────────────────────────
@@ -906,38 +896,83 @@ func (m model) handleProjectDelete(msg projectDeleteMsg) (tea.Model, tea.Cmd) {
 
 // ─── /set ───────────────────────────────────────────────────────────────────
 
+// setProjectResultMsg is returned after looking up project name
+type setProjectResultMsg struct {
+	projectID   string
+	projectName string
+	err         error
+}
+
 func (m model) cmdSet(args []string) (tea.Model, tea.Cmd) {
-	if len(args) < 2 {
+	if len(args) == 0 {
 		return m, tea.Sequence(
 			tea.Println(""),
-			tea.Println(dimStyle.Render("  Usage: /set project <uuid>")),
+			tea.Println(dimStyle.Render("  Usage: /set project [uuid-or-name]")),
+			tea.Println(dimStyle.Render("  Or use /projects for interactive selection")),
 			tea.Println(""),
 		)
 	}
 
 	key := strings.ToLower(args[0])
-	value := args[1]
 
 	switch key {
 	case "project":
 		if m.cfg == nil {
 			return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
 		}
-		m.cfg.ProjectID = value
-		if err := m.cfg.Save(); err != nil {
-			return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to save config: %v", err)))
+		if m.client == nil {
+			return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
 		}
-		if m.cfg.Server != "" && m.cfg.Token != "" {
-			m.client = api.NewClient(m.cfg)
+
+		// If no value provided, show interactive selector
+		if len(args) < 2 {
+			return m.cmdProjects(nil)
 		}
+
+		value := args[1]
+		client := m.client
 		return m, tea.Sequence(
-			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project set to: %s", value))),
-			tea.Println(dimStyle.Render("    You can now start investigating!")),
+			tea.Println(statusStyle.Render("  ⟳ Looking up project...")),
+			func() tea.Msg {
+				resp, err := client.ListProjects()
+				if err != nil {
+					return setProjectResultMsg{err: err}
+				}
+				projects := service.FilterSystemProjects(resp.Specs)
+				// Try to find by UUID or name
+				for _, p := range projects {
+					if p.UUID == value || strings.EqualFold(p.Name, value) {
+						return setProjectResultMsg{projectID: p.UUID, projectName: p.Name}
+					}
+				}
+				// Not found - return error instead of using invalid value
+				return setProjectResultMsg{err: fmt.Errorf("project %q not found", value)}
+			},
 		)
 
 	default:
 		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Unknown key: %s (valid: project)", key)))
 	}
+}
+
+func (m model) handleSetProjectResult(msg setProjectResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to set project: %v", msg.err)))
+	}
+
+	m.cfg.ProjectID = msg.projectID
+	m.cfg.ProjectName = msg.projectName
+	if err := m.cfg.Save(); err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to save config: %v", err)))
+	}
+	if m.cfg.Server != "" && m.cfg.Token != "" {
+		m.client = api.NewClient(m.cfg)
+	}
+
+	return m, tea.Sequence(
+		tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project set to: %s", msg.projectName))),
+		tea.Println(dimStyle.Render("    You can now start investigating!")),
+	)
 }
 
 // ─── /session ───────────────────────────────────────────────────────────────

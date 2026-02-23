@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -105,7 +107,7 @@ func (sp *StreamProcessor) Process(msg streamChunkMsg) []OutputEvent {
 		// not meant for display. The web UI also ignores them.
 		return nil
 	case "CONTENT_TYPE_EXECUTION_TIME":
-		return []OutputEvent{{Type: OutputExecTime, Text: msg.text}}
+		return []OutputEvent{{Type: OutputExecTime, Text: formatExecTime(msg.text)}}
 	default:
 		return nil
 	}
@@ -555,4 +557,45 @@ func isIncompleteListItem(trimmed string) bool {
 		}
 	}
 	return false
+}
+
+// formatExecTime converts execution time from milliseconds to human-readable format.
+// Input is expected to be a string of milliseconds (e.g., "301213").
+// Output examples: "5m 1s", "2.3s", "150ms"
+func formatExecTime(ms string) string {
+	millis, err := strconv.ParseInt(strings.TrimSpace(ms), 10, 64)
+	if err != nil {
+		return ms // return as-is if not a number
+	}
+
+	if millis < 1000 {
+		return fmt.Sprintf("%dms", millis)
+	}
+
+	seconds := millis / 1000
+	remainingMs := millis % 1000
+
+	if seconds < 60 {
+		if remainingMs > 0 {
+			return fmt.Sprintf("%d.%ds", seconds, remainingMs/100)
+		}
+		return fmt.Sprintf("%ds", seconds)
+	}
+
+	minutes := seconds / 60
+	remainingSec := seconds % 60
+
+	if minutes < 60 {
+		if remainingSec > 0 {
+			return fmt.Sprintf("%dm %ds", minutes, remainingSec)
+		}
+		return fmt.Sprintf("%dm", minutes)
+	}
+
+	hours := minutes / 60
+	remainingMin := minutes % 60
+	if remainingMin > 0 {
+		return fmt.Sprintf("%dh %dm", hours, remainingMin)
+	}
+	return fmt.Sprintf("%dh", hours)
 }
