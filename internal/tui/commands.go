@@ -2,10 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
+	"hawkeye-cli/internal/incidents"
 	"hawkeye-cli/internal/service"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -1935,6 +1938,97 @@ func (m model) cmdConnectionAddIncidentio(args []string) (tea.Model, tea.Cmd) {
 	)
 }
 
+type incidentTestResultMsg struct {
+	providerType string
+	created      []incidents.CreatedIncident
+	err          error
+}
+
+// parseIncidentTestArgs extracts --api-key, --routing-key, --file, --run-level from args.
+// Defaults: file = ~/.hawkeye/test_config, run-level = 1.
+func parseIncidentTestArgs(args []string) (apiKey, routingKey, filename string, runLevel int) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--api-key":
+			if i+1 < len(args) {
+				i++
+				apiKey = args[i]
+			}
+		case "--routing-key":
+			if i+1 < len(args) {
+				i++
+				routingKey = args[i]
+			}
+		case "--file":
+			if i+1 < len(args) {
+				i++
+				filename = args[i]
+			}
+		case "--run-level":
+			if i+1 < len(args) {
+				i++
+				n, err := strconv.Atoi(args[i])
+				if err == nil {
+					runLevel = n
+				}
+			}
+		}
+	}
+	if filename == "" {
+		home, _ := os.UserHomeDir()
+		candidate := home + "/.hawkeye/test_config"
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			filename = candidate
+		}
+	}
+	if runLevel == 0 {
+		runLevel = 1
+	}
+	return
+}
+
+func (m model) cmdIncidentsTest(providerType string, args []string) (tea.Model, tea.Cmd) {
+	apiKey, routingKey, filename, runLevel := parseIncidentTestArgs(args)
+	if apiKey == "" && routingKey == "" {
+		return m, tea.Println(warnMsgStyle.Render("  ! --api-key is required (use --routing-key for PagerDuty Events API)"))
+	}
+	creds := incidents.Creds{
+		ApiKey:     apiKey,
+		RoutingKey: routingKey,
+	}
+	input := incidents.IncidentInput{Count: runLevel}
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Running incident test via %s (run-level %d)...", providerType, runLevel))),
+		func() tea.Msg {
+			created, err := incidents.RunTest(providerType, creds, filename, input)
+			return incidentTestResultMsg{providerType: providerType, created: created, err: err}
+		},
+	)
+}
+
+func (m model) handleIncidentTestResult(msg incidentTestResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Incident test failed: %v", msg.err)))
+	}
+	cmds := []tea.Cmd{
+		tea.Println(""),
+		tea.Println(dimStyle.Render(fmt.Sprintf("  Created %d incident(s) via %s:", len(msg.created), msg.providerType))),
+		tea.Println(""),
+	}
+	for _, inc := range msg.created {
+		cmds = append(cmds,
+			tea.Println(fmt.Sprintf("  %-12s %s", dimStyle.Render("source:"), inc.SourceID)),
+			tea.Println(fmt.Sprintf("  %-12s %s", dimStyle.Render("remote:"), inc.RemoteID)),
+			tea.Println(fmt.Sprintf("  %-12s %s", dimStyle.Render("title:"), inc.Title)),
+		)
+		if inc.URL != "" {
+			cmds = append(cmds, tea.Println(fmt.Sprintf("  %-12s %s", dimStyle.Render("url:"), inc.URL)))
+		}
+		cmds = append(cmds, tea.Println(""))
+	}
+	return m, tea.Sequence(cmds...)
+}
+
 func (m model) handleAddConnectionResult(msg addConnectionResultMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Add connection failed: %v", msg.err)))
@@ -1972,6 +2066,9 @@ func (m model) cmdIncidents(args []string) (tea.Model, tea.Cmd) {
 			tea.Println("  "+pad(hintKeyStyle.Render("add pagerduty"), 30)+dimStyle.Render("Add a PagerDuty connection (--name, --api-key)")),
 			tea.Println("  "+pad(hintKeyStyle.Render("add firehydrant"), 30)+dimStyle.Render("Add a FireHydrant connection (--name, --api-key)")),
 			tea.Println("  "+pad(hintKeyStyle.Render("add incidentio"), 30)+dimStyle.Render("Add an incident.io connection (--name, --api-key)")),
+			tea.Println("  "+pad(hintKeyStyle.Render("test pagerduty"), 30)+dimStyle.Render("Test PagerDuty incidents (--api-key or --routing-key; --file, --run-level optional)")),
+			tea.Println("  "+pad(hintKeyStyle.Render("test firehydrant"), 30)+dimStyle.Render("Test FireHydrant incidents (--api-key; --file, --run-level optional)")),
+			tea.Println("  "+pad(hintKeyStyle.Render("test incidentio"), 30)+dimStyle.Render("Test incident.io incidents (--api-key; --file, --run-level optional)")),
 			tea.Println(""),
 		)
 	}
@@ -1992,7 +2089,19 @@ func (m model) cmdIncidents(args []string) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, tea.Println(warnMsgStyle.Render(fmt.Sprintf("  ! Unknown subcommand %q — try /incidents add", args[0])))
+	if args[0] == "test" {
+		if len(args) < 2 {
+			return m, tea.Println(warnMsgStyle.Render("  ! Usage: /incidents test <type> --api-key <key> [--run-level <n>]  (types: pagerduty, firehydrant, incidentio)"))
+		}
+		switch args[1] {
+		case "pagerduty", "firehydrant", "incidentio":
+			return m.cmdIncidentsTest(args[1], args[2:])
+		default:
+			return m, tea.Println(warnMsgStyle.Render(fmt.Sprintf("  ! Unknown type %q. Types: pagerduty, firehydrant, incidentio", args[1])))
+		}
+	}
+
+	return m, tea.Println(warnMsgStyle.Render(fmt.Sprintf("  ! Unknown subcommand %q — try /incidents add | test", args[0])))
 }
 
 // ─── /clear ─────────────────────────────────────────────────────────────────
