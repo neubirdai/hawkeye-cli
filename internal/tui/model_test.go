@@ -407,25 +407,7 @@ func TestLoginFlow(t *testing.T) {
 }
 
 func TestSessionCommands(t *testing.T) {
-	t.Run("sessions without client shows error", func(t *testing.T) {
-		m := newTestModel()
-		m.client = nil
-		_, cmd := m.cmdSessions()
-		if cmd == nil {
-			t.Error("expected error cmd, got nil")
-		}
-	})
-
-	t.Run("sessions without project shows error", func(t *testing.T) {
-		m := newTestModel()
-		m.cfg.ProjectID = ""
-		_, cmd := m.cmdSessions()
-		if cmd == nil {
-			t.Error("expected error cmd, got nil")
-		}
-	})
-
-	t.Run("set session updates sessionID", func(t *testing.T) {
+	t.Run("session with uuid sets sessionID", func(t *testing.T) {
 		m := newTestModel()
 		result, _ := m.cmdSetSession([]string{"new-session-id"})
 		rm := result.(model)
@@ -434,12 +416,45 @@ func TestSessionCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("set session without args shows current", func(t *testing.T) {
+	t.Run("session without args and no client shows error", func(t *testing.T) {
 		m := newTestModel()
-		m.sessionID = "existing-id"
+		m.client = nil
 		_, cmd := m.cmdSetSession(nil)
 		if cmd == nil {
-			t.Error("expected info cmd, got nil")
+			t.Error("expected error cmd, got nil")
+		}
+	})
+
+	t.Run("session without args and no project shows error", func(t *testing.T) {
+		m := newTestModel()
+		m.cfg.ProjectID = ""
+		_, cmd := m.cmdSetSession(nil)
+		if cmd == nil {
+			t.Error("expected error cmd, got nil")
+		}
+	})
+
+	t.Run("session loaded enters select mode", func(t *testing.T) {
+		m := newTestModel()
+		sessions := []api.SessionInfo{
+			{SessionUUID: "s1", Name: "First"},
+			{SessionUUID: "s2", Name: "Second"},
+		}
+		result, _ := m.handleSessionsLoaded(sessionsLoadedMsg{sessions: sessions})
+		rm := result.(model)
+		if rm.mode != modeSessionSelect {
+			t.Errorf("mode = %v, want modeSessionSelect", rm.mode)
+		}
+		if len(rm.sessionList) != 2 {
+			t.Errorf("sessionList len = %d, want 2", len(rm.sessionList))
+		}
+	})
+
+	t.Run("session loaded empty shows warning", func(t *testing.T) {
+		m := newTestModel()
+		_, cmd := m.handleSessionsLoaded(sessionsLoadedMsg{})
+		if cmd == nil {
+			t.Error("expected warning cmd, got nil")
 		}
 	})
 }
