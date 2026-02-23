@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -268,6 +269,71 @@ func TestValidateProfileHint(t *testing.T) {
 	want := "--profile staging"
 	if got := err.Error(); !contains(got, want) {
 		t.Errorf("Validate() error = %q, should contain %q", got, want)
+	}
+}
+
+func TestHistorySaveLoadRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	entries := []string{"/help", "what is the CPU usage?", "/sessions"}
+	if err := SaveHistory("", entries); err != nil {
+		t.Fatalf("SaveHistory() error = %v", err)
+	}
+	got := LoadHistory("")
+	if len(got) != len(entries) {
+		t.Fatalf("LoadHistory() returned %d entries, want %d", len(got), len(entries))
+	}
+	for i, v := range entries {
+		if got[i] != v {
+			t.Errorf("entry[%d] = %q, want %q", i, got[i], v)
+		}
+	}
+}
+
+func TestHistoryMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	got := LoadHistory("")
+	if got != nil {
+		t.Errorf("LoadHistory() on missing file = %v, want nil", got)
+	}
+}
+
+func TestHistoryProfileIsolation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := SaveHistory("dev", []string{"a"}); err != nil {
+		t.Fatalf("SaveHistory(dev) error = %v", err)
+	}
+	if err := SaveHistory("prod", []string{"b"}); err != nil {
+		t.Fatalf("SaveHistory(prod) error = %v", err)
+	}
+	dev := LoadHistory("dev")
+	prod := LoadHistory("prod")
+	if len(dev) != 1 || dev[0] != "a" {
+		t.Errorf("dev history = %v, want [a]", dev)
+	}
+	if len(prod) != 1 || prod[0] != "b" {
+		t.Errorf("prod history = %v, want [b]", prod)
+	}
+}
+
+func TestHistoryCap(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	big := make([]string, 1100)
+	for i := range big {
+		big[i] = fmt.Sprintf("cmd-%d", i)
+	}
+	if err := SaveHistory("", big); err != nil {
+		t.Fatalf("SaveHistory() error = %v", err)
+	}
+	got := LoadHistory("")
+	if len(got) != maxHistory {
+		t.Fatalf("LoadHistory() returned %d entries, want %d", len(got), maxHistory)
+	}
+	if got[0] != "cmd-100" {
+		t.Errorf("first entry = %q, want %q", got[0], "cmd-100")
 	}
 }
 
