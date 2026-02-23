@@ -42,6 +42,8 @@ var slashCommands = []slashCmd{
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
 	{"/incidents", "Add incident tool connections"},
+	{"/incidents add", "Add an incident management connection"},
+	{"/incidents test", "Test incident creation"},
 	{"/incidents add pagerduty", "Add a PagerDuty connection (--name, --api-key)"},
 	{"/incidents add firehydrant", "Add a FireHydrant connection (--name, --api-key)"},
 	{"/incidents add incidentio", "Add an incident.io connection (--name, --api-key)"},
@@ -595,12 +597,15 @@ func (m model) renderCommandMenu(matches []slashCmd) string {
 }
 
 // matchCommands returns all slash commands matching a prefix.
-// Top-level commands (no spaces) are shown while the user is still typing the
-// base command. Subcommands (contain a space) only appear once the user has
-// typed a space after the base command.
+// matchCommands returns the commands visible for the given prefix.
+// Commands are shown at the same depth as the prefix: the number of spaces in
+// the prefix (after the leading "/") determines which level is surfaced.
+// This produces a progressive-disclosure menu — typing "/incidents " shows
+// only "add" and "test", and typing "/incidents add " then reveals the three
+// provider-level completions.
 func matchCommands(prefix string) []slashCmd {
 	prefix = strings.ToLower(prefix)
-	// Just "/" — show only top-level commands
+	// Just "/" — show only top-level commands (depth 0)
 	if prefix == "/" {
 		var top []slashCmd
 		for _, c := range slashCommands {
@@ -610,19 +615,13 @@ func matchCommands(prefix string) []slashCmd {
 		}
 		return top
 	}
-	prefixHasSpace := strings.Contains(prefix[1:], " ")
+	prefixDepth := strings.Count(prefix[1:], " ")
 	var matches []slashCmd
 	for _, c := range slashCommands {
 		if !strings.HasPrefix(c.name, prefix) {
 			continue
 		}
-		nameHasSpace := strings.Contains(c.name[1:], " ")
-		// Only surface subcommands when the user has already typed a space
-		if nameHasSpace && !prefixHasSpace {
-			continue
-		}
-		// Only surface top-level commands when the user hasn't typed a space
-		if !nameHasSpace && prefixHasSpace {
+		if strings.Count(c.name[1:], " ") != prefixDepth {
 			continue
 		}
 		matches = append(matches, c)
