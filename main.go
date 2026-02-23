@@ -27,6 +27,7 @@ var version = "0.1.0"
 
 var activeProfile string
 var jsonOutput bool
+var continueLastSession bool
 
 func main() {
 	args := os.Args[1:]
@@ -34,13 +35,28 @@ func main() {
 	// Parse global flags first (--profile)
 	args = parseGlobalFlags(args)
 
-	// No args → launch interactive mode (default)
+	// Resolve --continue to last session from config
+	var resumeSessionID string
+	if continueLastSession {
+		cfg, err := config.Load(activeProfile)
+		if err != nil {
+			display.Error(err.Error())
+			os.Exit(1)
+		}
+		if cfg.LastSession == "" {
+			display.Error("no previous session found. Run an investigation first")
+			os.Exit(1)
+		}
+		resumeSessionID = cfg.LastSession
+	}
+
+	// No args (or just --continue) → launch interactive mode
 	if len(args) == 0 {
 		if jsonOutput {
 			display.Error("--json is not supported in interactive mode")
 			os.Exit(1)
 		}
-		if err := tui.Run(version, activeProfile); err != nil {
+		if err := tui.Run(version, activeProfile, resumeSessionID); err != nil {
 			display.Error(err.Error())
 			os.Exit(1)
 		}
@@ -53,7 +69,7 @@ func main() {
 			display.Error("--json is not supported in interactive mode")
 			os.Exit(1)
 		}
-		if err := tui.Run(version, activeProfile); err != nil {
+		if err := tui.Run(version, activeProfile, resumeSessionID); err != nil {
 			display.Error(err.Error())
 			os.Exit(1)
 		}
@@ -2688,6 +2704,8 @@ func parseGlobalFlags(args []string) []string {
 			}
 		case "-j", "--json":
 			jsonOutput = true
+		case "-c", "--continue":
+			continueLastSession = true
 		default:
 			remaining = append(remaining, args[i])
 		}
@@ -2714,6 +2732,7 @@ func printUsage() {
 %sGlobal Options:%s
   --profile <name>            Use a named config profile (default: unnamed)
   -j, --json                  Output results as JSON (for scripting/piping)
+  -c, --continue              Resume the last used session in interactive mode
 
 %sGetting Started:%s
   login <url> -u <user> -p <pass>  Authenticate (URL = frontend address)

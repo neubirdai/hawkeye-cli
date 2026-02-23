@@ -7,8 +7,8 @@ import (
 )
 
 // Run launches the interactive TUI mode (inline, like Claude Code).
-func Run(version, profile string) error {
-	m := initialModel(version, profile)
+func Run(version, profile, resumeSessionID string) error {
+	m := initialModel(version, profile, resumeSessionID)
 
 	p := tea.NewProgram(m)
 
