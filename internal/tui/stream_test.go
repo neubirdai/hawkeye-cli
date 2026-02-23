@@ -192,11 +192,11 @@ func TestMatchCommands(t *testing.T) {
 	}{
 		{"/", topLevelCount},
 		{"/h", 1},                // /help
-		{"/s", 6},                // /score, /session, /session-report, /sessions, /set, /summary
+		{"/s", 5},                // /score, /session, /session-report, /set, /summary
 		{"/q", 2},                // /queries, /quit
 		{"/xyz", 0},              // no match
 		{"/login", 1},            // /login
-		{"/se", 4},               // /session, /session-report, /sessions, /set
+		{"/se", 3},               // /session, /session-report, /set
 		{"/connections", 1},      // only /connections itself (no space yet)
 		{"/connections ", 2},     // subcommands: list, resources
 		{"/connections a", 0},    // no subcommands under connections starting with a

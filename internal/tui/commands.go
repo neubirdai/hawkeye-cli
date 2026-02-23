@@ -44,8 +44,6 @@ func (m model) dispatchCommand(input string) (tea.Model, tea.Cmd) {
 		return m.cmdLogin(args)
 	case "/projects":
 		return m.cmdProjects(args)
-	case "/sessions":
-		return m.cmdSessions()
 	case "/inspect":
 		return m.cmdInspect(args)
 	case "/summary":
@@ -107,7 +105,7 @@ func (m model) cmdHelp() (tea.Model, tea.Cmd) {
 		tea.Println(""),
 		tea.Println("  " + pad(hintKeyStyle.Render("/login <url>"), 30) + dimStyle.Render("Login to a Hawkeye server")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/projects"), 30) + dimStyle.Render("List available projects")),
-		tea.Println("  " + pad(hintKeyStyle.Render("/sessions"), 30) + dimStyle.Render("List recent sessions")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/session [uuid]"), 30) + dimStyle.Render("Pick or set active session")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/inspect <uuid>"), 30) + dimStyle.Render("View session details")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/summary <uuid>"), 30) + dimStyle.Render("Get session summary")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/score <uuid>"), 30) + dimStyle.Render("Show RCA quality scores")),
@@ -123,7 +121,6 @@ func (m model) cmdHelp() (tea.Model, tea.Cmd) {
 		tea.Println("  " + pad(hintKeyStyle.Render("/session-report [uuid]"), 30) + dimStyle.Render("Per-session time-saved report")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/prompts"), 30) + dimStyle.Render("Browse investigation prompts")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/set project <uuid>"), 30) + dimStyle.Render("Set the active project")),
-		tea.Println("  " + pad(hintKeyStyle.Render("/session <uuid>"), 30) + dimStyle.Render("Set active session for follow-ups")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/config"), 30) + dimStyle.Render("Show current configuration")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/clear"), 30) + dimStyle.Render("Clear the screen")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/quit"), 30) + dimStyle.Render("Exit Hawkeye")),
@@ -303,34 +300,9 @@ func (m model) cmdConfig() (tea.Model, tea.Cmd) {
 	)
 }
 
-// ─── /sessions ──────────────────────────────────────────────────────────────
-
 type sessionsLoadedMsg struct {
 	sessions []api.SessionInfo
 	err      error
-}
-
-func (m model) cmdSessions() (tea.Model, tea.Cmd) {
-	if m.client == nil {
-		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
-	}
-	if m.cfg.ProjectID == "" {
-		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Run /projects first."))
-	}
-
-	client := m.client
-	projectID := m.cfg.ProjectID
-
-	return m, tea.Sequence(
-		tea.Println(statusStyle.Render("  ⟳ Loading sessions...")),
-		func() tea.Msg {
-			resp, err := client.SessionList(projectID, 0, 15, nil)
-			if err != nil {
-				return sessionsLoadedMsg{err: err}
-			}
-			return sessionsLoadedMsg{sessions: resp.Sessions}
-		},
-	)
 }
 
 func (m model) handleSessionsLoaded(msg sessionsLoadedMsg) (tea.Model, tea.Cmd) {
@@ -342,40 +314,11 @@ func (m model) handleSessionsLoaded(msg sessionsLoadedMsg) (tea.Model, tea.Cmd) 
 		return m, tea.Println(warnMsgStyle.Render("  ! No sessions found."))
 	}
 
-	var cmds []tea.Cmd
-	cmds = append(cmds,
-		tea.Println(""),
-		tea.Println(dimStyle.Render(fmt.Sprintf("  Sessions (%d):", len(msg.sessions)))),
-		tea.Println(""),
-	)
-
-	for _, s := range msg.sessions {
-		name := s.Name
-		if name == "" {
-			name = "(unnamed)"
-		}
-		typeIcon := "💬"
-		if s.SessionType == "SESSION_TYPE_INCIDENT" {
-			typeIcon = "🚨"
-		}
-		pinned := ""
-		if s.Pinned {
-			pinned = " 📌"
-		}
-
-		cmds = append(cmds,
-			tea.Println(fmt.Sprintf("  %s %s%s", typeIcon, name, pinned)),
-			tea.Println(dimStyle.Render(fmt.Sprintf("    %s  %s", s.SessionUUID, s.CreateTime))),
-		)
-	}
-
-	cmds = append(cmds,
-		tea.Println(""),
-		tea.Println(dimStyle.Render("  Tip: /inspect <uuid> to view · /session <uuid> to continue")),
-		tea.Println(""),
-	)
-
-	return m, tea.Sequence(cmds...)
+	sortSessionsNewestFirst(msg.sessions)
+	m.mode = modeSessionSelect
+	m.sessionList = msg.sessions
+	m.sessionListIdx = 0
+	return m, nil
 }
 
 // ─── /incidents list ────────────────────────────────────────────────────────
@@ -1118,17 +1061,38 @@ func (m model) handleSetProjectResult(msg setProjectResultMsg) (tea.Model, tea.C
 // ─── /session ───────────────────────────────────────────────────────────────
 
 func (m model) cmdSetSession(args []string) (tea.Model, tea.Cmd) {
-	if len(args) == 0 {
-		if m.sessionID != "" {
-			return m, tea.Println(dimStyle.Render(fmt.Sprintf("  Active session: %s", m.sessionID)))
-		}
-		return m, tea.Println(dimStyle.Render("  No active session. Start an investigation or use /session <uuid>."))
+	if len(args) > 0 {
+		m.sessionID = args[0]
+		return m, tea.Sequence(
+			tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Session set to: %s", m.sessionID))),
+			tea.Println(dimStyle.Render("    Follow-up questions will continue in this session.")),
+		)
 	}
 
-	m.sessionID = args[0]
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+	if m.cfg.ProjectID == "" {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Run /projects first."))
+	}
+
+	client := m.client
+	projectID := m.cfg.ProjectID
+
 	return m, tea.Sequence(
-		tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Session set to: %s", m.sessionID))),
-		tea.Println(dimStyle.Render("    Follow-up questions will continue in this session.")),
+		tea.Println(statusStyle.Render("  ⟳ Loading sessions...")),
+		func() tea.Msg {
+			filters := []api.PaginationFilter{{
+				Key:      "session_type",
+				Value:    "SESSION_TYPE_CHAT",
+				Operator: "==",
+			}}
+			resp, err := client.SessionList(projectID, 0, 20, filters)
+			if err != nil {
+				return sessionsLoadedMsg{err: err}
+			}
+			return sessionsLoadedMsg{sessions: resp.Sessions}
+		},
 	)
 }
 
