@@ -942,7 +942,12 @@ func (m model) cmdSetSession(args []string) (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(
 		tea.Println(statusStyle.Render("  ⟳ Loading sessions...")),
 		func() tea.Msg {
-			resp, err := client.SessionList(projectID, 20, nil)
+			filters := []api.PaginationFilter{{
+				Key:      "session_type",
+				Value:    "SESSION_TYPE_CHAT",
+				Operator: "==",
+			}}
+			resp, err := client.SessionList(projectID, 20, filters)
 			if err != nil {
 				return sessionsLoadedMsg{err: err}
 			}
