@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
@@ -25,6 +27,7 @@ const (
 	modeLoginUser
 	modeLoginPass
 	modeProjectSelect
+	modeSessionSelect
 )
 
 // ─── Slash command registry ─────────────────────────────────────────────────
@@ -64,9 +67,8 @@ var slashCommands = []slashCmd{
 	{"/report", "Show incident analytics"},
 	{"/rerun", "Rerun an investigation"},
 	{"/score", "Show RCA quality scores"},
-	{"/session", "Set active session"},
+	{"/session", "Pick or set active session"},
 	{"/session-report", "Per-session report"},
-	{"/sessions", "List recent sessions"},
 	{"/set", "Set project or config"},
 	{"/summary", "Get session summary"},
 }
@@ -99,6 +101,10 @@ type model struct {
 	// Project selection state
 	projectList    []api.ProjectSpec
 	projectListIdx int
+
+	// Session selection state
+	sessionList    []api.SessionInfo
+	sessionListIdx int
 
 	// UI state
 	ready        bool
@@ -208,6 +214,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, tea.Println(warnMsgStyle.Render("  ! Investigation cancelled.")))
 				return m, tea.Batch(cmds...)
 			}
+			if m.mode == modeSessionSelect {
+				m.mode = modeIdle
+				m.sessionList = nil
+				m.sessionListIdx = 0
+				cmds = append(cmds, tea.Println(warnMsgStyle.Render("  ! Session selection cancelled.")))
+				return m, tea.Batch(cmds...)
+			}
 			return m, tea.Quit
 
 		case tea.KeyEsc:
@@ -233,6 +246,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, tea.Println(warnMsgStyle.Render("  ! Project selection cancelled.")))
 				return m, tea.Batch(cmds...)
 			}
+			if m.mode == modeSessionSelect {
+				m.mode = modeIdle
+				m.sessionList = nil
+				m.sessionListIdx = 0
+				cmds = append(cmds, tea.Println(warnMsgStyle.Render("  ! Session selection cancelled.")))
+				return m, tea.Batch(cmds...)
+			}
 			if m.cmdMenuOpen {
 				m.cmdMenuOpen = false
 				m.cmdMenuIdx = 0
@@ -240,6 +260,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyUp:
+			if m.mode == modeSessionSelect {
+				if len(m.sessionList) > 0 {
+					m.sessionListIdx--
+					if m.sessionListIdx < 0 {
+						m.sessionListIdx = len(m.sessionList) - 1
+					}
+				}
+				return m, nil
+			}
 			if m.mode == modeProjectSelect {
 				if len(m.projectList) > 0 {
 					m.projectListIdx--
@@ -279,6 +308,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyDown:
+			if m.mode == modeSessionSelect {
+				if len(m.sessionList) > 0 {
+					m.sessionListIdx++
+					if m.sessionListIdx >= len(m.sessionList) {
+						m.sessionListIdx = 0
+					}
+				}
+				return m, nil
+			}
 			if m.mode == modeProjectSelect {
 				if len(m.projectList) > 0 {
 					m.projectListIdx++
@@ -331,6 +369,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
+			if m.mode == modeSessionSelect && len(m.sessionList) > 0 {
+				selected := m.sessionList[m.sessionListIdx]
+				m.sessionID = selected.SessionUUID
+				m.mode = modeIdle
+				m.sessionList = nil
+				m.sessionListIdx = 0
+				name := selected.Name
+				if name == "" {
+					name = "(unnamed)"
+				}
+				return m, tea.Sequence(
+					tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Session set to: %s", name))),
+					tea.Println(dimStyle.Render(fmt.Sprintf("    %s", selected.SessionUUID))),
+					tea.Println(dimStyle.Render("    Follow-up questions will continue in this session.")),
+				)
+			}
+
 			// Project selection mode - select the highlighted project
 			if m.mode == modeProjectSelect && len(m.projectList) > 0 {
 				selected := m.projectList[m.projectListIdx]
@@ -617,6 +672,8 @@ func (m model) View() string {
 		s.WriteString(m.spinner.View() + " " + statusStyle.Render(status))
 	} else if m.mode == modeProjectSelect {
 		s.WriteString(m.renderProjectList())
+	} else if m.mode == modeSessionSelect {
+		s.WriteString(m.renderSessionList())
 	} else {
 		s.WriteString(m.input.View())
 	}
@@ -666,6 +723,84 @@ func (m model) renderProjectList() string {
 	return strings.Join(lines, "\n")
 }
 
+// renderSessionList renders the interactive session selection list
+func (m model) renderSessionList() string {
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("  Select a session (%d):", len(m.sessionList)))
+	lines = append(lines, "")
+
+	maxVisible := m.height - 6
+	if maxVisible < 5 {
+		maxVisible = 5
+	}
+
+	start := 0
+	if m.sessionListIdx >= maxVisible {
+		start = m.sessionListIdx - maxVisible + 1
+	}
+	end := start + maxVisible
+	if end > len(m.sessionList) {
+		end = len(m.sessionList)
+	}
+
+	for i := start; i < end; i++ {
+		s := m.sessionList[i]
+		name := s.Name
+		if name == "" {
+			name = "(unnamed)"
+		}
+		if len(name) > 50 {
+			name = name[:47] + "..."
+		}
+		status := formatSessionStatus(s.InvestigationStatus)
+		ts := formatSessionTime(s.CreateTime)
+
+		if i == m.sessionListIdx {
+			lines = append(lines, fmt.Sprintf("  %s %s  %s  %s",
+				cmdSelectedNameStyle.Render("▸"),
+				cmdSelectedNameStyle.Render(name),
+				status,
+				dimStyle.Render(ts)))
+		} else {
+			lines = append(lines, fmt.Sprintf("    %s  %s  %s", name, status, dimStyle.Render(ts)))
+		}
+	}
+	lines = append(lines, "")
+
+	return strings.Join(lines, "\n")
+}
+
+func formatSessionStatus(s string) string {
+	switch s {
+	case "INVESTIGATION_STATUS_NOT_STARTED":
+		return dimStyle.Render("[not started]")
+	case "INVESTIGATION_STATUS_IN_PROGRESS":
+		return statusStyle.Render("[in progress]")
+	case "INVESTIGATION_STATUS_COMPLETED", "INVESTIGATION_STATUS_INVESTIGATED":
+		return successMsgStyle.Render("[completed]")
+	default:
+		return ""
+	}
+}
+
+func formatSessionTime(ts string) string {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, ts)
+		if err != nil {
+			return ts
+		}
+	}
+	return t.Local().Format("Jan 02 15:04")
+}
+
+func sortSessionsNewestFirst(sessions []api.SessionInfo) {
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].CreateTime > sessions[j].CreateTime
+	})
+}
+
 // ─── Hint bar ───────────────────────────────────────────────────────────────
 
 func (m model) renderHints() string {
@@ -677,7 +812,7 @@ func (m model) renderHints() string {
 		return hintBarStyle.Render("  Enter submit   Esc cancel")
 	}
 
-	if m.mode == modeProjectSelect {
+	if m.mode == modeProjectSelect || m.mode == modeSessionSelect {
 		return hintBarStyle.Render("  ↑↓ navigate   Enter select   Esc cancel")
 	}
 
