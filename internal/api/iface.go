@@ -6,7 +6,7 @@ type HawkeyeAPI interface {
 	Login(email, password string) (*LoginResponse, error)
 	FetchUserInfo() (*UserSpec, error)
 	NewSession(projectUUID string) (*NewSessionResponse, error)
-	SessionList(projectUUID string, limit int, filters []PaginationFilter) (*SessionListResponse, error)
+	SessionList(projectUUID string, start, limit int, filters []PaginationFilter) (*SessionListResponse, error)
 	SessionInspect(projectUUID, sessionUUID string) (*SessionInspectResponse, error)
 	GetSessionSummary(projectUUID, sessionUUID string) (*GetSessionSummaryResponse, error)
 	ProcessPromptStream(projectUUID, sessionUUID, prompt string, cb StreamCallback) error

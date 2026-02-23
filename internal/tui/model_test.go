@@ -44,11 +44,19 @@ func (m *mockAPI) NewSession(projectUUID string) (*api.NewSessionResponse, error
 	return &api.NewSessionResponse{SessionUUID: "new-session-uuid"}, nil
 }
 
-func (m *mockAPI) SessionList(projectUUID string, limit int, filters []api.PaginationFilter) (*api.SessionListResponse, error) {
+func (m *mockAPI) SessionList(projectUUID string, start, limit int, filters []api.PaginationFilter) (*api.SessionListResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &api.SessionListResponse{Sessions: m.sessions}, nil
+	all := m.sessions
+	end := start + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	if start >= len(all) {
+		return &api.SessionListResponse{Sessions: nil}, nil
+	}
+	return &api.SessionListResponse{Sessions: all[start:end]}, nil
 }
 
 func (m *mockAPI) SessionInspect(projectUUID, sessionUUID string) (*api.SessionInspectResponse, error) {

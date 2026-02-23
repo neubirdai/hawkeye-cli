@@ -511,7 +511,7 @@ func cmdSessions(args []string) error {
 	client := api.NewClient(cfg)
 
 	filters := service.BuildSessionFilters(status, from, to, search, uninvestigated)
-	resp, err := client.SessionList(cfg.ProjectID, limit, filters)
+	resp, err := client.SessionList(cfg.ProjectID, 0, limit, filters)
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}

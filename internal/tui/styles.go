@@ -176,3 +176,13 @@ var dimStyle = lipgloss.NewStyle().
 
 var separatorStyle = lipgloss.NewStyle().
 	Foreground(colorDimGray)
+
+// ─── Incident List ───────────────────────────────────────────────────────────
+
+var incidentRowStyle = lipgloss.NewStyle().
+	Foreground(colorWhite)
+
+var incidentRowSelectedStyle = lipgloss.NewStyle().
+	Foreground(colorOrange).
+	Bold(true).
+	Reverse(true)

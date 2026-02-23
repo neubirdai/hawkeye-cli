@@ -508,12 +508,12 @@ type SessionListResponse struct {
 	Sessions []SessionInfo  `json:"sessions,omitempty"`
 }
 
-func (c *Client) SessionList(projectUUID string, limit int, filters []PaginationFilter) (*SessionListResponse, error) {
+func (c *Client) SessionList(projectUUID string, start, limit int, filters []PaginationFilter) (*SessionListResponse, error) {
 	reqBody := SessionListRequest{
 		Request:          &GenDBRequest{ClientIdentifier: "hawkeye-cli", UUID: c.orgUUID},
 		OrganizationUUID: c.orgUUID,
 		ProjectUUID:      projectUUID,
-		Pagination:       &PaginationRequest{Start: 0, Limit: limit},
+		Pagination:       &PaginationRequest{Start: start, Limit: limit},
 		Filters:          filters,
 	}
 	var resp SessionListResponse

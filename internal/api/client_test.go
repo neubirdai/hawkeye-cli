@@ -429,7 +429,7 @@ func TestSessionListWithFilters(t *testing.T) {
 		defer srv.Close()
 
 		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), token: "tok", orgUUID: "org"}
-		resp, err := c.SessionList("proj", 10, nil)
+		resp, err := c.SessionList("proj", 0, 10, nil)
 		if err != nil {
 			t.Fatalf("SessionList() error = %v", err)
 		}
@@ -461,7 +461,7 @@ func TestSessionListWithFilters(t *testing.T) {
 			{Key: "investigation_status", Value: "INVESTIGATION_STATUS_COMPLETED", Operator: "=="},
 			{Key: "create_time", Value: "2025-01-01", Operator: "gte"},
 		}
-		resp, err := c.SessionList("proj", 20, filters)
+		resp, err := c.SessionList("proj", 0, 20, filters)
 		if err != nil {
 			t.Fatalf("SessionList() error = %v", err)
 		}
