@@ -926,7 +926,7 @@ func (m model) cmdSet(args []string) (tea.Model, tea.Cmd) {
 
 		// If no value provided, show interactive selector
 		if len(args) < 2 {
-			return m.cmdProjects()
+			return m.cmdProjects(nil)
 		}
 
 		value := args[1]
