@@ -26,6 +26,7 @@ const (
 	modeLoginURL
 	modeLoginUser
 	modeLoginPass
+	modeIncidentList  // interactive incident selection list
 	modeProjectSelect
 	modeSessionSelect
 )
@@ -47,6 +48,7 @@ var slashCommands = []slashCmd{
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
 	{"/incidents", "Add incident tool connections"},
+	{"/incidents list", "Show open incidents (paginated)"},
 	{"/incidents add", "Add an incident management connection"},
 	{"/incidents test", "Test incident creation"},
 	{"/incidents add pagerduty", "Add a PagerDuty connection (--name, --api-key)"},
@@ -117,6 +119,12 @@ type model struct {
 	history      []string // stored command history
 	historyIdx   int      // current position in history (-1 = not browsing)
 	historySaved string   // saved input value when entering history mode
+
+	// Incident list state (modeIncidentList)
+	incidentList        []api.SessionInfo
+	incidentListIdx     int
+	incidentListPage    int
+	incidentListHasMore bool
 }
 
 func initialModel(version, profile string) model {
@@ -205,6 +213,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// ── Incident list navigation ──────────────────────────────────────
+		if m.mode == modeIncidentList {
+			switch msg.Type {
+			case tea.KeyEsc, tea.KeyCtrlC:
+				m.mode = modeIdle
+				return m, tea.Println(dimStyle.Render("  Incident list closed."))
+			case tea.KeyUp:
+				if m.incidentListIdx > 0 {
+					m.incidentListIdx--
+				}
+				return m, nil
+			case tea.KeyDown:
+				if m.incidentListIdx < len(m.incidentList)-1 {
+					m.incidentListIdx++
+				}
+				return m, nil
+			case tea.KeyEnter:
+				selected := m.incidentList[m.incidentListIdx]
+				m.sessionID = selected.SessionUUID
+				m.mode = modeIdle
+				return m.cmdInspect([]string{selected.SessionUUID})
+			case tea.KeyRunes:
+				switch string(msg.Runes) {
+				case "n":
+					if m.incidentListHasMore {
+						return m.cmdOpenIncidentsList([]string{fmt.Sprintf("%d", m.incidentListPage+1)})
+					}
+				case "p":
+					if m.incidentListPage > 1 {
+						return m.cmdOpenIncidentsList([]string{fmt.Sprintf("%d", m.incidentListPage-1)})
+					}
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			if m.mode == modeStreaming {
@@ -601,6 +645,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case incidentTestResultMsg:
 		return m.handleIncidentTestResult(msg)
+
+	case openIncidentsLoadedMsg:
+		return m.handleOpenIncidentsLoaded(msg)
+
 	case setProjectResultMsg:
 		return m.handleSetProjectResult(msg)
 
@@ -661,6 +709,18 @@ func (m model) View() string {
 	}
 
 	var s strings.Builder
+
+	if m.mode == modeIncidentList {
+		s.WriteString(m.renderIncidentList())
+		s.WriteString("\n")
+		sepWidth := min(m.width, 80)
+		if sepWidth < 20 {
+			sepWidth = 20
+		}
+		s.WriteString(separatorStyle.Render(strings.Repeat("─", sepWidth)))
+		s.WriteString("\n")
+		return s.String()
+	}
 
 	if m.mode == modeStreaming {
 		status := "Investigating..."

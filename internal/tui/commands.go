@@ -321,6 +321,146 @@ func (m model) handleSessionsLoaded(msg sessionsLoadedMsg) (tea.Model, tea.Cmd) 
 	return m, nil
 }
 
+// ─── /incidents list ────────────────────────────────────────────────────────
+
+const openIncidentsPageSize = 20
+
+type openIncidentsLoadedMsg struct {
+	sessions []api.SessionInfo
+	page     int
+	hasMore  bool
+	err      error
+}
+
+func (m model) cmdOpenIncidentsList(args []string) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ Not logged in. Run /login first."))
+	}
+	if m.cfg.ProjectID == "" {
+		return m, tea.Println(errorMsgStyle.Render("  ✗ No project set. Run /projects first."))
+	}
+
+	page := 1
+	if len(args) > 0 {
+		if n, err := strconv.Atoi(args[0]); err == nil && n > 0 {
+			page = n
+		}
+	}
+
+	client := m.client
+	projectID := m.cfg.ProjectID
+	start := (page - 1) * openIncidentsPageSize
+
+	return m, tea.Sequence(
+		tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Loading open incidents (page %d)...", page))),
+		func() tea.Msg {
+			filters := []api.PaginationFilter{
+				{Key: "session_type", Value: "SESSION_TYPE_INCIDENT", Operator: "=="},
+			}
+			resp, err := client.SessionList(projectID, start, openIncidentsPageSize, filters)
+			if err != nil {
+				return openIncidentsLoadedMsg{err: err, page: page}
+			}
+			hasMore := len(resp.Sessions) == openIncidentsPageSize
+			return openIncidentsLoadedMsg{sessions: resp.Sessions, page: page, hasMore: hasMore}
+		},
+	)
+}
+
+func (m model) handleOpenIncidentsLoaded(msg openIncidentsLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.mode = modeIdle
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to load incidents: %v", msg.err)))
+	}
+
+	if len(msg.sessions) == 0 {
+		m.mode = modeIdle
+		if msg.page == 1 {
+			return m, tea.Println(warnMsgStyle.Render("  ! No open incidents found."))
+		}
+		return m, tea.Println(warnMsgStyle.Render("  ! No more incidents."))
+	}
+
+	m.incidentList = msg.sessions
+	m.incidentListIdx = 0
+	m.incidentListPage = msg.page
+	m.incidentListHasMore = msg.hasMore
+	m.mode = modeIncidentList
+	return m, nil
+}
+
+func formatInvestigationStatus(s string) string {
+	switch s {
+	case "INVESTIGATION_STATUS_NOT_STARTED":
+		return dimStyle.Render("[not started]")
+	case "INVESTIGATION_STATUS_IN_PROGRESS":
+		return statusStyle.Render("[in progress]")
+	case "INVESTIGATION_STATUS_INVESTIGATED":
+		return successMsgStyle.Render("[investigated]")
+	case "INVESTIGATION_STATUS_COMPLETED":
+		return successMsgStyle.Render("[completed]")
+	default:
+		if s == "" {
+			return ""
+		}
+		return dimStyle.Render("[" + s + "]")
+	}
+}
+
+// ─── Incident list renderer ──────────────────────────────────────────────────
+
+func (m model) renderIncidentList() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	header := fmt.Sprintf("  🚨 Open Incidents — page %d (%d shown)", m.incidentListPage, len(m.incidentList))
+	b.WriteString(dimStyle.Render(header) + "\n\n")
+
+	// Cap visible rows to avoid overflowing short terminals (reserve ~6 lines for header/footer)
+	maxVisible := m.height - 6
+	if maxVisible < 5 {
+		maxVisible = 5
+	}
+
+	start := 0
+	if m.incidentListIdx >= maxVisible {
+		start = m.incidentListIdx - maxVisible + 1
+	}
+	end := start + maxVisible
+	if end > len(m.incidentList) {
+		end = len(m.incidentList)
+	}
+
+	for i := start; i < end; i++ {
+		s := m.incidentList[i]
+		name := s.Name
+		if name == "" {
+			name = "(unnamed)"
+		}
+		if len(name) > 50 {
+			name = name[:47] + "..."
+		}
+		status := formatInvestigationStatus(s.InvestigationStatus)
+		padded := fmt.Sprintf("%-52s %s", name, status)
+		if i == m.incidentListIdx {
+			b.WriteString("  " + incidentRowSelectedStyle.Render("► "+padded) + "\n")
+		} else {
+			b.WriteString("  " + incidentRowStyle.Render("  "+padded) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+	hints := "  ↑↓ navigate  Enter select"
+	if m.incidentListHasMore {
+		hints += "  n next"
+	}
+	if m.incidentListPage > 1 {
+		hints += "  p prev"
+	}
+	hints += "  Esc cancel"
+	b.WriteString(hintBarStyle.Render(hints))
+	return b.String()
+}
+
 // ─── /inspect ───────────────────────────────────────────────────────────────
 
 type inspectResultMsg struct {
@@ -947,7 +1087,7 @@ func (m model) cmdSetSession(args []string) (tea.Model, tea.Cmd) {
 				Value:    "SESSION_TYPE_CHAT",
 				Operator: "==",
 			}}
-			resp, err := client.SessionList(projectID, 20, filters)
+			resp, err := client.SessionList(projectID, 0, 20, filters)
 			if err != nil {
 				return sessionsLoadedMsg{err: err}
 			}
@@ -2062,10 +2202,15 @@ func (m model) cmdIncidents(args []string) (tea.Model, tea.Cmd) {
 			tea.Println(""),
 			tea.Println(dimStyle.Render("  /incidents subcommands:")),
 			tea.Println(""),
+			tea.Println("  "+pad(hintKeyStyle.Render("list"), 30)+dimStyle.Render("Show open incidents (paginated)")),
 			tea.Println("  "+pad(hintKeyStyle.Render("add"), 30)+dimStyle.Render("Add an incident management connection")),
 			tea.Println("  "+pad(hintKeyStyle.Render("test"), 30)+dimStyle.Render("Test incident creation")),
 			tea.Println(""),
 		)
+	}
+
+	if args[0] == "list" {
+		return m.cmdOpenIncidentsList(args[1:])
 	}
 
 	if args[0] == "add" {

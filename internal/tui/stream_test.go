@@ -202,7 +202,8 @@ func TestMatchCommands(t *testing.T) {
 		{"/connections a", 0},    // no subcommands under connections starting with a
 		{"/connections list", 1}, // /connections list
 		{"/incidents", 1},        // only /incidents itself
-		{"/incidents ", 2},       // depth-1 subcommands: add, test
+		{"/incidents ", 3},       // depth-1 subcommands: list, add, test
+		{"/incidents l", 1},      // /incidents list
 		{"/incidents a", 1},      // /incidents add
 		{"/incidents add ", 3},   // /incidents add pagerduty, firehydrant, incidentio
 		{"/incidents test ", 3},  // /incidents test pagerduty, firehydrant, incidentio
