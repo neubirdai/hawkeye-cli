@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -253,5 +255,112 @@ func TestParseGlobalFlagsJSON(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClaudeSkillContent(t *testing.T) {
+	content := claudeSkillContent
+
+	// Must start with YAML frontmatter
+	if !strings.HasPrefix(content, "---\n") {
+		t.Error("skill content must start with YAML frontmatter (---)")
+	}
+
+	// Must have required frontmatter fields
+	for _, field := range []string{"name: hawkeye", "description:", "allowed-tools:"} {
+		if !strings.Contains(content, field) {
+			t.Errorf("skill content missing frontmatter field: %s", field)
+		}
+	}
+
+	// Must restrict to hawkeye commands only
+	if !strings.Contains(content, "Bash(hawkeye *)") {
+		t.Error("skill content must restrict allowed-tools to Bash(hawkeye *)")
+	}
+
+	// Must include dynamic help injection
+	if !strings.Contains(content, "`!`hawkeye help`") {
+		t.Error("skill content must include dynamic help injection: `!`hawkeye help`")
+	}
+
+	// Must include key workflow sections
+	for _, section := range []string{
+		"Investigate an Incident",
+		"Review Sessions",
+		"Uninvestigated Alerts",
+		"Analytics",
+		"Manage Connections",
+		"Configure Instructions",
+	} {
+		if !strings.Contains(content, section) {
+			t.Errorf("skill content missing workflow section: %s", section)
+		}
+	}
+
+	// Must include --json tip
+	if !strings.Contains(content, "--json") {
+		t.Error("skill content must mention --json flag")
+	}
+
+	// Sanity check: content should be substantial (at least 50 lines)
+	lines := strings.Count(content, "\n")
+	if lines < 50 {
+		t.Errorf("skill content only has %d lines, expected at least 50", lines)
+	}
+}
+
+func TestCmdSetupClaude(t *testing.T) {
+	// Use a temp dir as HOME to isolate from real ~/.claude
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillDir := filepath.Join(home, ".claude", "skills", "hawkeye")
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+
+	// Test 1: Fresh install
+	if err := cmdSetupClaude(nil); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	data, err := os.ReadFile(skillFile)
+	if err != nil {
+		t.Fatalf("skill file not created: %v", err)
+	}
+	if string(data) != claudeSkillContent {
+		t.Error("skill file content does not match claudeSkillContent")
+	}
+
+	// Verify permissions
+	info, _ := os.Stat(skillFile)
+	if perm := info.Mode().Perm(); perm != 0644 {
+		t.Errorf("skill file permissions = %o, want 0644", perm)
+	}
+	dirInfo, _ := os.Stat(skillDir)
+	if perm := dirInfo.Mode().Perm(); perm != 0755 {
+		t.Errorf("skill dir permissions = %o, want 0755", perm)
+	}
+
+	// Test 2: Update (overwrite)
+	if err := cmdSetupClaude(nil); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	data2, _ := os.ReadFile(skillFile)
+	if string(data2) != claudeSkillContent {
+		t.Error("skill file content changed after update")
+	}
+
+	// Test 3: Uninstall
+	if err := cmdSetupClaude([]string{"--uninstall"}); err != nil {
+		t.Fatalf("uninstall failed: %v", err)
+	}
+
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Error("skill directory should be removed after uninstall")
+	}
+
+	// Test 4: Uninstall when not installed (no-op)
+	if err := cmdSetupClaude([]string{"--uninstall"}); err != nil {
+		t.Fatalf("uninstall-when-not-installed failed: %v", err)
 	}
 }
