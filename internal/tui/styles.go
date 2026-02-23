@@ -27,10 +27,10 @@ var (
 		lipgloss.Color("#D2691E"), // darker orange for light bg
 	)
 
-	// Greens
+	// Greens — 78/28: matches ansiSuccess in render.go
 	colorGreen = adaptiveColor(
-		lipgloss.Color("78"), // bright green for dark bg
-		lipgloss.Color("28"), // darker green for light bg
+		lipgloss.Color("78"), // green 78 for dark bg — softer than neon 46
+		lipgloss.Color("28"), // green 28 for light bg
 	)
 
 	// Yellows
@@ -45,26 +45,22 @@ var (
 		lipgloss.Color("160"), // darker red for light bg
 	)
 
-	// Magentas
-	colorMagenta = adaptiveColor(
-		lipgloss.Color("213"), // bright magenta for dark bg
-		lipgloss.Color("127"), // darker magenta for light bg
-	)
-
 	// Blues
 	colorBlue = adaptiveColor(
 		lipgloss.Color("111"), // bright blue for dark bg
 		lipgloss.Color("26"),  // darker blue for light bg
 	)
 
-	// Cyans
+	// Cyans — unified to one family
+	// 39/25: info cyan — links, session names, interactive elements
 	colorCyan = adaptiveColor(
-		lipgloss.Color("86"), // bright cyan for dark bg
-		lipgloss.Color("30"), // darker cyan for light bg
+		lipgloss.Color("39"), // cyan 39 for dark bg — matches ansiInfo in render.go
+		lipgloss.Color("25"), // blue 25 for light bg
 	)
+	// 73/30: accent teal — COT, structural chrome (softer than cyan)
 	colorLightCyan = adaptiveColor(
-		lipgloss.Color("123"), // very bright cyan for dark bg
-		lipgloss.Color("37"),  // teal for light bg
+		lipgloss.Color("73"), // teal 73 for dark bg — matches ansiAccent in render.go
+		lipgloss.Color("30"), // teal 30 for light bg
 	)
 
 	// Grays — these need the most adjustment
@@ -73,8 +69,8 @@ var (
 		lipgloss.Color("240"), // darker gray for light bg
 	)
 	colorDimGray = adaptiveColor(
-		lipgloss.Color("245"), // medium gray for dark bg
-		lipgloss.Color("250"), // lighter for light bg (less contrast needed)
+		lipgloss.Color("240"), // gray 240 for dark bg — visible but dimmer than body (252)
+		lipgloss.Color("245"), // mid gray for light bg — dimmer than body text
 	)
 
 	// White/Black swap for text
@@ -161,7 +157,7 @@ var sourceHeaderStyle = lipgloss.NewStyle().
 	Bold(true)
 
 var cotHeaderStyle = lipgloss.NewStyle().
-	Foreground(colorMagenta).
+	Foreground(colorCyan). // info cyan — investigation step marker
 	Bold(true)
 
 // COT explanation text (↳ line) — visible on both backgrounds

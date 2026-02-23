@@ -646,6 +646,101 @@ func TestSummaryTextNotCutOff(t *testing.T) {
 	}
 }
 
+// ─── Table routing ──────────────────────────────────────────────────────────
+
+func TestTableRoutingInChat(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// Table rows followed by a non-table line should emit OutputTable, not raw OutputChat
+	out := sp.Process(chatDeltaMsg("| Header |\n|---|\n| Row 1 |\nnext line\n"))
+
+	if !hasType(out, OutputTable) {
+		t.Error("expected OutputTable event from chat table rows")
+	}
+	for _, ev := range out {
+		if ev.Type == OutputChat && strings.HasPrefix(strings.TrimSpace(ev.Text), "|") {
+			t.Errorf("table row must not appear as raw OutputChat: %q", ev.Text)
+		}
+	}
+}
+
+func TestTableRoutingInCOT(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	sp.Process(cotStartMsg("cot1", "Analyzing"))
+	// Table rows then a non-table line — all in one delta
+	out := sp.Process(cotDeltaMsg("cot1", "| Header |\n|---|\n| Row 1 |\nnext line\n"))
+
+	if !hasType(out, OutputTable) {
+		t.Error("expected OutputTable event from COT table rows")
+	}
+	for _, ev := range out {
+		if ev.Type == OutputCOTText && strings.HasPrefix(strings.TrimSpace(ev.Text), "|") {
+			t.Errorf("table row must not appear as raw OutputCOTText: %q", ev.Text)
+		}
+	}
+}
+
+func TestTableFlushAtCOTBoundary(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	sp.Process(cotStartMsg("cot1", "Analyzing"))
+	// Last line is a table row with no trailing \n — it stays in cotBuffer
+	sp.Process(cotDeltaMsg("cot1", "| A | B |\n|---|---|\n| last row |"))
+
+	// cot_end should flush the buffered table row as OutputTable
+	out := sp.Process(cotEndMsg("cot1"))
+	if !hasType(out, OutputTable) {
+		t.Error("cot_end should flush pending table rows as OutputTable")
+	}
+}
+
+func TestTableFlushAtStreamEnd(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// Table rows with no non-table line after — flushed by Flush()
+	sp.Process(chatDeltaMsg("| Col |\n|-----|\n| row1 |"))
+
+	out := sp.Flush()
+	if !hasType(out, OutputTable) {
+		t.Error("Flush() should emit pending table rows as OutputTable")
+	}
+}
+
+// ─── Dividers ────────────────────────────────────────────────────────────────
+
+func TestDividerBetweenCOTSteps(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	sp.Process(cotLegacyMsg("cot1", "Step 1", "some text\n", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
+	out := sp.Process(cotLegacyMsg("cot2", "Step 2", "more text\n", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
+
+	if !hasType(out, OutputDivider) {
+		t.Error("expected OutputDivider when transitioning between COT steps")
+	}
+}
+
+func TestDividerBeforeChat(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	sp.Process(cotLegacyMsg("cot1", "Analyzing", "some text\n", "CHAIN_OF_THOUGHT_STATUS_IN_PROGRESS"))
+	out := sp.Process(chatDeltaMsg("Summary line\n"))
+
+	if !hasType(out, OutputDivider) {
+		t.Error("expected OutputDivider when transitioning from COT to chat")
+	}
+}
+
+func TestNoDividerWithoutCOT(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// Chat without any prior COT should not emit a divider
+	out := sp.Process(chatDeltaMsg("Direct answer\n"))
+	if hasType(out, OutputDivider) {
+		t.Error("no divider expected when chat starts without COT")
+	}
+}
+
 func TestLastStatus(t *testing.T) {
 	sp := NewStreamProcessor()
 

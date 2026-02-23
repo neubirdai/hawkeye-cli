@@ -21,6 +21,8 @@ const (
 	OutputSessionName                      // Session name
 	OutputExecTime                         // Execution time
 	OutputBlank                            // Blank separator line
+	OutputDivider                          // Horizontal rule between major sections (COT→COT, COT→chat)
+	OutputTable                            // Fully formatted table (all rows buffered + rendered)
 )
 
 // OutputEvent is a structured event emitted by the StreamProcessor.
@@ -54,6 +56,9 @@ type StreamProcessor struct {
 	chatPrinted   int
 	chatBuffer    string
 	chatStreaming bool
+
+	// Table state — rows buffered until the table ends, then emitted as OutputTable
+	tableBuffer []string
 
 	// Gating
 	seenSources     map[string]bool
@@ -109,6 +114,9 @@ func (sp *StreamProcessor) Process(msg streamChunkMsg) []OutputEvent {
 // Flush force-flushes all pending buffers. Called on stream done/cancel.
 func (sp *StreamProcessor) Flush() []OutputEvent {
 	var out []OutputEvent
+
+	// Flush table buffer first (table may end at stream boundary)
+	out = append(out, sp.flushTableBuffer()...)
 
 	// Flush chat buffer
 	if sp.chatBuffer != "" && strings.TrimSpace(sp.chatBuffer) != "" {
@@ -218,7 +226,7 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 		sp.cotStepActive = false
 		sp.cotTextActive = false
 		out = append(out, sp.flushPendingProgress()...)
-		out = append(out, OutputEvent{Type: OutputBlank})
+		out = append(out, OutputEvent{Type: OutputDivider})
 	}
 
 	if sp.activeCotID != cotID {
@@ -249,6 +257,7 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 	// Helper: print complete lines, buffer the last partial line.
 	// Also buffers lines that look like incomplete list items (e.g., just "-" or "1.")
 	// since the backend may replace them with full content.
+	// Table rows (starting with "|") are routed to the shared tableBuffer.
 	printLines := func(text string) {
 		combined := sp.cotBuffers[cotID] + text
 		lines := strings.Split(combined, "\n")
@@ -266,11 +275,17 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 					sp.cotBuffers[cotID] = strings.Join(lines[i:], "\n")
 					return // stop processing, everything is buffered
 				}
-				out = append(out, OutputEvent{
-					Type:  OutputCOTText,
-					Text:  line,
-					CotID: cotID,
-				})
+				// Route table rows to shared table buffer; flush on non-table line
+				if strings.HasPrefix(trimmed, "|") {
+					sp.tableBuffer = append(sp.tableBuffer, line)
+				} else {
+					out = append(out, sp.flushTableBuffer()...)
+					out = append(out, OutputEvent{
+						Type:  OutputCOTText,
+						Text:  line,
+						CotID: cotID,
+					})
+				}
 			} else {
 				sp.cotBuffers[cotID] = line
 			}
@@ -330,13 +345,14 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 func (sp *StreamProcessor) handleChat(msg streamChunkMsg) []OutputEvent {
 	var out []OutputEvent
 
-	// Transition from COT to Chat: flush COT state.
+	// Transition from COT to Chat: flush COT state and add a section divider.
 	if sp.cotStepActive || sp.cotTextActive {
 		if sp.activeCotID != "" {
 			out = append(out, sp.flushCOTBuffer(sp.activeCotID)...)
 		}
 		sp.cotStepActive = false
 		sp.cotTextActive = false
+		out = append(out, OutputEvent{Type: OutputDivider})
 	}
 	out = append(out, sp.flushPendingProgress()...)
 
@@ -361,7 +377,7 @@ func (sp *StreamProcessor) handleChat(msg streamChunkMsg) []OutputEvent {
 	lines := strings.Split(combined, "\n")
 	for i, line := range lines {
 		if i < len(lines)-1 {
-			out = append(out, OutputEvent{Type: OutputChat, Text: line})
+			out = append(out, sp.routeChatLine(line)...)
 		} else {
 			sp.chatBuffer = line
 		}
@@ -370,10 +386,43 @@ func (sp *StreamProcessor) handleChat(msg streamChunkMsg) []OutputEvent {
 	return out
 }
 
+// routeChatLine routes a completed chat line — buffering table rows or flushing
+// the table when a non-table line is encountered.
+func (sp *StreamProcessor) routeChatLine(line string) []OutputEvent {
+	trimmed := strings.TrimSpace(line)
+	isTableRow := strings.HasPrefix(trimmed, "|")
+
+	if isTableRow {
+		sp.tableBuffer = append(sp.tableBuffer, line)
+		return nil
+	}
+
+	// Non-table line — flush any buffered table first
+	var out []OutputEvent
+	if len(sp.tableBuffer) > 0 {
+		out = append(out, sp.flushTableBuffer()...)
+	}
+	out = append(out, OutputEvent{Type: OutputChat, Text: line})
+	return out
+}
+
+// flushTableBuffer emits the accumulated table rows as a single OutputTable event.
+func (sp *StreamProcessor) flushTableBuffer() []OutputEvent {
+	if len(sp.tableBuffer) == 0 {
+		return nil
+	}
+	rows := sp.tableBuffer
+	sp.tableBuffer = nil
+	return []OutputEvent{{Type: OutputTable, Text: strings.Join(rows, "\n")}}
+}
+
 // ─── Follow-up Suggestions ─────────────────────────────────────────────────
 
 func (sp *StreamProcessor) handleFollowUp(msg streamChunkMsg) []OutputEvent {
 	var out []OutputEvent
+
+	// Flush table buffer before follow-ups.
+	out = append(out, sp.flushTableBuffer()...)
 
 	// Flush chat buffer before follow-ups.
 	if sp.chatBuffer != "" && strings.TrimSpace(sp.chatBuffer) != "" {
@@ -405,18 +454,31 @@ func (sp *StreamProcessor) handleFollowUp(msg streamChunkMsg) []OutputEvent {
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
 func (sp *StreamProcessor) flushCOTBuffer(cotID string) []OutputEvent {
+	var out []OutputEvent
 	buf := sp.cotBuffers[cotID]
-	if buf != "" && strings.TrimSpace(buf) != "" {
-		sp.cotBuffers[cotID] = ""
-		return []OutputEvent{{
-			Type:     OutputCOTText,
-			Text:     buf,
-			CotID:    cotID,
-			Finished: true,
-		}}
-	}
 	sp.cotBuffers[cotID] = ""
-	return nil
+
+	if buf != "" && strings.TrimSpace(buf) != "" {
+		trimmed := strings.TrimSpace(buf)
+		if strings.HasPrefix(trimmed, "|") {
+			// Last partial line is a table row — add it to the table buffer,
+			// then fall through to flush the whole table below.
+			sp.tableBuffer = append(sp.tableBuffer, buf)
+		} else {
+			// Non-table line: flush any pending table rows first.
+			out = append(out, sp.flushTableBuffer()...)
+			out = append(out, OutputEvent{
+				Type:     OutputCOTText,
+				Text:     buf,
+				CotID:    cotID,
+				Finished: true,
+			})
+		}
+	}
+
+	// Always flush any remaining table rows at the COT step boundary.
+	out = append(out, sp.flushTableBuffer()...)
+	return out
 }
 
 func (sp *StreamProcessor) flushPendingProgress() []OutputEvent {
