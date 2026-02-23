@@ -18,6 +18,7 @@ type Config struct {
 	Token       string `json:"token,omitempty"`
 	OrgUUID     string `json:"org_uuid,omitempty"`
 	ProjectID   string `json:"project_uuid,omitempty"`
+	ProjectName string `json:"project_name,omitempty"`
 	LastSession string `json:"last_session,omitempty"`
 	Profile     string `json:"-"`
 }
@@ -46,16 +47,27 @@ func (c *Config) ConsoleSessionURL(sessionID string) string {
 	return base + "/console/project/" + c.ProjectID + "/session/" + sessionID
 }
 
-func configPath(profile string) (string, error) {
+func configBase() (string, error) {
+	if d := os.Getenv("SNAP_USER_COMMON"); d != "" {
+		return filepath.Join(d, configDir), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot find home directory: %w", err)
+	}
+	return filepath.Join(home, configDir), nil
+}
+
+func configPath(profile string) (string, error) {
+	base, err := configBase()
+	if err != nil {
+		return "", err
 	}
 	filename := configFile
 	if profile != "" {
 		filename = fmt.Sprintf("config-%s.json", profile)
 	}
-	return filepath.Join(home, configDir, filename), nil
+	return filepath.Join(base, filename), nil
 }
 
 func Load(profile string) (*Config, error) {
@@ -130,11 +142,10 @@ func (c *Config) ValidateProject() error {
 }
 
 func ListProfiles() ([]string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := configBase()
 	if err != nil {
-		return nil, fmt.Errorf("cannot find home directory: %w", err)
+		return nil, err
 	}
-	dir := filepath.Join(home, configDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

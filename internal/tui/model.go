@@ -6,6 +6,7 @@ import (
 
 	"hawkeye-cli/internal/api"
 	"hawkeye-cli/internal/config"
+	"hawkeye-cli/internal/service"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -23,7 +24,8 @@ const (
 	modeLoginURL
 	modeLoginUser
 	modeLoginPass
-	modeIncidentList // interactive incident selection list
+	modeIncidentList  // interactive incident selection list
+	modeProjectSelect
 )
 
 // ─── Slash command registry ─────────────────────────────────────────────────
@@ -43,7 +45,9 @@ var slashCommands = []slashCmd{
 	{"/feedback", "Thumbs down feedback"},
 	{"/help", "Show all commands"},
 	{"/incidents", "Add incident tool connections"},
-	{"/incidents list", "Show open incidents (interactive)"},
+	{"/incidents list", "Show open incidents (paginated)"},
+	{"/incidents add", "Add an incident management connection"},
+	{"/incidents test", "Test incident creation"},
 	{"/incidents add pagerduty", "Add a PagerDuty connection (--name, --api-key)"},
 	{"/incidents add firehydrant", "Add a FireHydrant connection (--name, --api-key)"},
 	{"/incidents add incidentio", "Add an incident.io connection (--name, --api-key)"},
@@ -55,7 +59,7 @@ var slashCommands = []slashCmd{
 	{"/investigate-alert", "Investigate an alert"},
 	{"/link", "Get web UI URL for session"},
 	{"/login", "Login to a Hawkeye server"},
-	{"/projects", "List/manage projects"},
+	{"/projects", "Select a project (interactive)"},
 	{"/prompts", "Browse investigation prompts"},
 	{"/queries", "Show investigation queries"},
 	{"/quit", "Exit Hawkeye"},
@@ -93,6 +97,10 @@ type model struct {
 	// Login flow state
 	loginURL  string
 	loginUser string
+
+	// Project selection state
+	projectList    []api.ProjectSpec
+	projectListIdx int
 
 	// UI state
 	ready        bool
@@ -150,10 +158,33 @@ func initialModel(version, profile string) model {
 // ─── Init ───────────────────────────────────────────────────────────────────
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textinput.Blink,
 		m.spinner.Tick,
-	)
+	}
+	// If we have a project ID but no project name, fetch it in the background
+	if m.client != nil && m.cfg != nil && m.cfg.ProjectID != "" && m.cfg.ProjectName == "" {
+		client := m.client
+		projectID := m.cfg.ProjectID
+		cmds = append(cmds, func() tea.Msg {
+			resp, err := client.ListProjects()
+			if err != nil {
+				return nil
+			}
+			for _, p := range resp.Specs {
+				if p.UUID == projectID {
+					return projectNameFetchedMsg{name: p.Name}
+				}
+			}
+			return nil
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+// projectNameFetchedMsg is sent when project name is fetched on startup
+type projectNameFetchedMsg struct {
+	name string
 }
 
 // ─── Update ─────────────────────────────────────────────────────────────────
@@ -171,7 +202,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.ready {
 			m.ready = true
 			// Print welcome header on first render
-			welcome := renderWelcome(m.version, serverStr(m.cfg), projectStr(m.cfg), orgStr(m.cfg), m.width)
+			welcome := renderWelcome(m.version, serverStr(m.cfg), projectNameStr(m.cfg), m.width)
 			cmds = append(cmds, tea.Println(welcome))
 		}
 
@@ -239,6 +270,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, tea.Println(warnMsgStyle.Render("  ! Login cancelled.")))
 				return m, tea.Batch(cmds...)
 			}
+			if m.mode == modeProjectSelect {
+				m.mode = modeIdle
+				m.projectList = nil
+				m.projectListIdx = 0
+				cmds = append(cmds, tea.Println(warnMsgStyle.Render("  ! Project selection cancelled.")))
+				return m, tea.Batch(cmds...)
+			}
 			if m.cmdMenuOpen {
 				m.cmdMenuOpen = false
 				m.cmdMenuIdx = 0
@@ -246,6 +284,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyUp:
+			if m.mode == modeProjectSelect {
+				if len(m.projectList) > 0 {
+					m.projectListIdx--
+					if m.projectListIdx < 0 {
+						m.projectListIdx = len(m.projectList) - 1
+					}
+				}
+				return m, nil
+			}
 			if m.mode == modeIdle {
 				if m.cmdMenuOpen {
 					matches := matchCommands(m.input.Value())
@@ -276,6 +323,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyDown:
+			if m.mode == modeProjectSelect {
+				if len(m.projectList) > 0 {
+					m.projectListIdx++
+					if m.projectListIdx >= len(m.projectList) {
+						m.projectListIdx = 0
+					}
+				}
+				return m, nil
+			}
 			if m.mode == modeIdle {
 				if m.cmdMenuOpen {
 					matches := matchCommands(m.input.Value())
@@ -319,6 +375,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
+			// Project selection mode - select the highlighted project
+			if m.mode == modeProjectSelect && len(m.projectList) > 0 {
+				selected := m.projectList[m.projectListIdx]
+				m.mode = modeIdle
+				m.projectList = nil
+				m.projectListIdx = 0
+				return m.selectProject(selected)
+			}
+
 			// If command menu is open and an item is selected, pick it
 			if m.mode == modeIdle && m.cmdMenuOpen && m.cmdMenuIdx >= 0 {
 				matches := matchCommands(m.input.Value())
@@ -417,8 +482,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamErrMsg:
 		m.mode = modeIdle
 		activeStreamCh = nil
-		cmds = append(cmds, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Stream error: %v", msg.err))))
 		m.resetStreamState()
+
+		// Check if this is a "project does not exist" error - offer to select a project
+		errStr := msg.err.Error()
+		if strings.Contains(errStr, "does not exist") || strings.Contains(errStr, "not found") {
+			cmds = append(cmds,
+				tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ %v", msg.err))),
+				tea.Println(warnMsgStyle.Render("  ! Loading available projects...")),
+			)
+			// Auto-trigger project selection
+			if m.client != nil {
+				client := m.client
+				cmds = append(cmds, func() tea.Msg {
+					resp, err := client.ListProjects()
+					if err != nil {
+						return projectsLoadedMsg{err: err}
+					}
+					return projectsLoadedMsg{projects: service.FilterSystemProjects(resp.Specs)}
+				})
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		cmds = append(cmds, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Stream error: %v", msg.err))))
 		return m, tea.Batch(cmds...)
 
 	// ── Login result ──────────────────────────────────────────────────
@@ -506,6 +593,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openIncidentsLoadedMsg:
 		return m.handleOpenIncidentsLoaded(msg)
+
+	case setProjectResultMsg:
+		return m.handleSetProjectResult(msg)
+
+	case projectNameFetchedMsg:
+		if msg.name != "" && m.cfg != nil {
+			m.cfg.ProjectName = msg.name
+			_ = m.cfg.Save() // Save silently, don't interrupt user
+		}
+		return m, nil
 	}
 
 	// Update sub-components
@@ -578,6 +675,8 @@ func (m model) View() string {
 		// Add blank lines to prevent spinner from overwriting last printed content
 		s.WriteString("\n\n")
 		s.WriteString(m.spinner.View() + " " + statusStyle.Render(status))
+	} else if m.mode == modeProjectSelect {
+		s.WriteString(m.renderProjectList())
 	} else {
 		s.WriteString(m.input.View())
 	}
@@ -597,6 +696,36 @@ func (m model) View() string {
 	return s.String()
 }
 
+// renderProjectList renders the interactive project selection list
+func (m model) renderProjectList() string {
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, "  Select a project:")
+	lines = append(lines, "")
+
+	for i, p := range m.projectList {
+		ready := successMsgStyle.Render("ready")
+		if !p.Ready {
+			ready = warnMsgStyle.Render("not ready")
+		}
+
+		if i == m.projectListIdx {
+			// Highlighted row
+			lines = append(lines, fmt.Sprintf("  %s %s  %s",
+				cmdSelectedNameStyle.Render("▸"),
+				cmdSelectedNameStyle.Render(p.Name),
+				ready))
+			lines = append(lines, fmt.Sprintf("    %s", dimStyle.Render(p.UUID)))
+		} else {
+			lines = append(lines, fmt.Sprintf("    %s  %s", p.Name, ready))
+			lines = append(lines, fmt.Sprintf("    %s", dimStyle.Render(p.UUID)))
+		}
+	}
+	lines = append(lines, "")
+
+	return strings.Join(lines, "\n")
+}
+
 // ─── Hint bar ───────────────────────────────────────────────────────────────
 
 func (m model) renderHints() string {
@@ -606,6 +735,10 @@ func (m model) renderHints() string {
 
 	if m.mode == modeLoginURL || m.mode == modeLoginUser || m.mode == modeLoginPass {
 		return hintBarStyle.Render("  Enter submit   Esc cancel")
+	}
+
+	if m.mode == modeProjectSelect {
+		return hintBarStyle.Render("  ↑↓ navigate   Enter select   Esc cancel")
 	}
 
 	// Show vertical command menu when menu is open
@@ -654,12 +787,15 @@ func (m model) renderCommandMenu(matches []slashCmd) string {
 }
 
 // matchCommands returns all slash commands matching a prefix.
-// Top-level commands (no spaces) are shown while the user is still typing the
-// base command. Subcommands (contain a space) only appear once the user has
-// typed a space after the base command.
+// matchCommands returns the commands visible for the given prefix.
+// Commands are shown at the same depth as the prefix: the number of spaces in
+// the prefix (after the leading "/") determines which level is surfaced.
+// This produces a progressive-disclosure menu — typing "/incidents " shows
+// only "add" and "test", and typing "/incidents add " then reveals the three
+// provider-level completions.
 func matchCommands(prefix string) []slashCmd {
 	prefix = strings.ToLower(prefix)
-	// Just "/" — show only top-level commands
+	// Just "/" — show only top-level commands (depth 0)
 	if prefix == "/" {
 		var top []slashCmd
 		for _, c := range slashCommands {
@@ -669,19 +805,13 @@ func matchCommands(prefix string) []slashCmd {
 		}
 		return top
 	}
-	prefixHasSpace := strings.Contains(prefix[1:], " ")
+	prefixDepth := strings.Count(prefix[1:], " ")
 	var matches []slashCmd
 	for _, c := range slashCommands {
 		if !strings.HasPrefix(c.name, prefix) {
 			continue
 		}
-		nameHasSpace := strings.Contains(c.name[1:], " ")
-		// Only surface subcommands when the user has already typed a space
-		if nameHasSpace && !prefixHasSpace {
-			continue
-		}
-		// Only surface top-level commands when the user hasn't typed a space
-		if !nameHasSpace && prefixHasSpace {
+		if strings.Count(c.name[1:], " ") != prefixDepth {
 			continue
 		}
 		matches = append(matches, c)
@@ -694,6 +824,22 @@ func matchCommands(prefix string) []slashCmd {
 func (m *model) resetStreamState() {
 	m.processor = NewStreamProcessor()
 	m.streamPrompt = ""
+}
+
+// selectProject sets the selected project and saves to config
+func (m model) selectProject(p api.ProjectSpec) (tea.Model, tea.Cmd) {
+	m.cfg.ProjectID = p.UUID
+	m.cfg.ProjectName = p.Name
+	if err := m.cfg.Save(); err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Failed to save config: %v", err)))
+	}
+	if m.cfg.Server != "" && m.cfg.Token != "" {
+		m.client = api.NewClient(m.cfg)
+	}
+	return m, tea.Sequence(
+		tea.Println(successMsgStyle.Render(fmt.Sprintf("  ✓ Project set to: %s", p.Name))),
+		tea.Println(dimStyle.Render("    You can now start investigating!")),
+	)
 }
 
 // handleStreamChunk processes a streaming event via the StreamProcessor
@@ -762,18 +908,18 @@ func serverStr(cfg *config.Config) string {
 	return cfg.Server
 }
 
-func projectStr(cfg *config.Config) string {
+func projectNameStr(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	return cfg.ProjectID
-}
-
-func orgStr(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
+	// Prefer project name, fall back to truncated UUID
+	if cfg.ProjectName != "" {
+		return cfg.ProjectName
 	}
-	return cfg.OrgUUID
+	if cfg.ProjectID != "" {
+		return truncateUUID(cfg.ProjectID)
+	}
+	return ""
 }
 
 func truncateUUID(s string) string {

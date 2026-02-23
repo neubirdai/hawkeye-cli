@@ -7,7 +7,7 @@ import (
 
 // ─── Welcome Screen ─────────────────────────────────────────────────────────
 
-func renderWelcome(version, server, project, org string, width int) string {
+func renderWelcome(version, server, projectName string, width int) string {
 	titleLine := logoTitleStyle.Render("Hawkeye CLI") + " " + versionStyle.Render("v"+version)
 
 	var infoLine string
@@ -19,10 +19,10 @@ func renderWelcome(version, server, project, org string, width int) string {
 			serverDisplay = serverDisplay[:37] + "..."
 		}
 		projectDisplay := dimStyle.Render("not set")
-		if project != "" {
-			projectDisplay = project
+		if projectName != "" {
+			projectDisplay = projectName
 			if len(projectDisplay) > 36 {
-				projectDisplay = projectDisplay[:8] + "..." + projectDisplay[len(projectDisplay)-4:]
+				projectDisplay = projectDisplay[:33] + "..."
 			}
 		}
 		infoLine = welcomeInfoLabel.Render(fmt.Sprintf("%s · %s", serverDisplay, projectDisplay))

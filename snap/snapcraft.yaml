@@ -1,0 +1,29 @@
+name: hawkeye-cli
+base: core24
+version: '0.1.0'
+summary: AI-powered SRE incident investigation CLI
+description: |
+  Hawkeye CLI is a command-line client for the Neubird Hawkeye AI SRE platform.
+  It enables AI-powered incident investigations with real-time SSE streaming,
+  interactive session management, and chain-of-thought reasoning visualization.
+license: MIT
+source-code: https://github.com/neubirdai/hawkeye-cli
+
+grade: stable
+confinement: strict
+
+apps:
+  hawkeye-cli:
+    command: bin/hawkeye
+    plugs:
+      - network
+      - home
+
+parts:
+  hawkeye:
+    plugin: go
+    source: .
+    build-snaps:
+      - go/1.24/stable
+    override-build: |
+      go build -ldflags="-s -w" -o $CRAFT_PART_INSTALL/bin/hawkeye .
