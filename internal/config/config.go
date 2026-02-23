@@ -173,3 +173,54 @@ func ProfileName(profile string) string {
 	}
 	return profile
 }
+
+const maxHistory = 1000
+
+func historyPath(profile string) (string, error) {
+	base, err := configBase()
+	if err != nil {
+		return "", err
+	}
+	filename := "history.json"
+	if profile != "" {
+		filename = fmt.Sprintf("history-%s.json", profile)
+	}
+	return filepath.Join(base, filename), nil
+}
+
+func LoadHistory(profile string) []string {
+	path, err := historyPath(profile)
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var entries []string
+	if json.Unmarshal(data, &entries) != nil {
+		return nil
+	}
+	if len(entries) > maxHistory {
+		entries = entries[len(entries)-maxHistory:]
+	}
+	return entries
+}
+
+func SaveHistory(profile string, entries []string) error {
+	path, err := historyPath(profile)
+	if err != nil {
+		return err
+	}
+	if len(entries) > maxHistory {
+		entries = entries[len(entries)-maxHistory:]
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}

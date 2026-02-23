@@ -156,7 +156,7 @@ func initialModel(version, profile string) model {
 		client:     client,
 		mode:       modeIdle,
 		processor:  NewStreamProcessor(),
-		history:    make([]string, 0),
+		history:    config.LoadHistory(profile),
 		historyIdx: -1,
 	}
 }
@@ -322,33 +322,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.mode == modeIdle {
-				if m.cmdMenuOpen {
-					matches := matchCommands(m.input.Value())
-					if len(matches) > 0 {
-						m.cmdMenuIdx--
-						if m.cmdMenuIdx < 0 {
-							m.cmdMenuIdx = len(matches) - 1
-						}
-						return m, nil
-					}
-				} else if len(m.history) > 0 {
-					// Navigate command history
-					if m.historyIdx == -1 {
-						// Entering history mode - save current input
-						m.historySaved = m.input.Value()
-						m.historyIdx = len(m.history) - 1
-					} else {
-						// Move up in history
-						m.historyIdx--
-						if m.historyIdx < 0 {
-							m.historyIdx = 0
-						}
-					}
-					m.input.SetValue(m.history[m.historyIdx])
-					m.input.CursorEnd()
-					return m, nil
+			if m.mode == modeIdle && len(m.history) > 0 {
+				m.cmdMenuOpen = false
+				if m.historyIdx == -1 {
+					m.historySaved = m.input.Value()
+					m.historyIdx = len(m.history) - 1
+				} else if m.historyIdx > 0 {
+					m.historyIdx--
 				}
+				m.input.SetValue(m.history[m.historyIdx])
+				m.input.CursorEnd()
+				return m, nil
 			}
 
 		case tea.KeyDown:
@@ -370,30 +354,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.mode == modeIdle {
-				if m.cmdMenuOpen {
-					matches := matchCommands(m.input.Value())
-					if len(matches) > 0 {
-						m.cmdMenuIdx++
-						if m.cmdMenuIdx >= len(matches) {
-							m.cmdMenuIdx = 0
-						}
-						return m, nil
-					}
-				} else if m.historyIdx != -1 {
-					// Navigate down in history
-					m.historyIdx++
-					if m.historyIdx >= len(m.history) {
-						// Exit history mode - restore saved input
-						m.historyIdx = -1
-						m.input.SetValue(m.historySaved)
-						m.historySaved = ""
-					} else {
-						m.input.SetValue(m.history[m.historyIdx])
-					}
-					m.input.CursorEnd()
-					return m, nil
+			if m.mode == modeIdle && m.historyIdx != -1 {
+				m.historyIdx++
+				if m.historyIdx >= len(m.history) {
+					m.historyIdx = -1
+					m.input.SetValue(m.historySaved)
+					m.historySaved = ""
+				} else {
+					m.input.SetValue(m.history[m.historyIdx])
 				}
+				m.input.CursorEnd()
+				return m, nil
 			}
 
 		case tea.KeyTab:
@@ -459,10 +430,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Add to history (avoid duplicates if same as last command)
 			if len(m.history) == 0 || m.history[len(m.history)-1] != value {
 				m.history = append(m.history, value)
-				// Limit history size to 1000 entries
 				if len(m.history) > 1000 {
 					m.history = m.history[len(m.history)-1000:]
 				}
+				_ = config.SaveHistory(m.profile, m.history)
 			}
 			m.historyIdx = -1
 			m.historySaved = ""
@@ -930,7 +901,9 @@ func (m model) renderCommandMenu(matches []slashCmd) string {
 // provider-level completions.
 func matchCommands(prefix string) []slashCmd {
 	prefix = strings.ToLower(prefix)
-	// Just "/" — show only top-level commands (depth 0)
+	if len(prefix) == 0 || prefix[0] != '/' {
+		return nil
+	}
 	if prefix == "/" {
 		var top []slashCmd
 		for _, c := range slashCommands {
