@@ -672,9 +672,9 @@ func renderOutputEvent(ev OutputEvent) string {
 	case OutputCOTExplanation:
 		return cotExplanationStyle.Render("     ↳ " + ev.Text)
 	case OutputCOTText:
-		return "    " + ev.Text
+		return "    " + renderMarkdownText(ev.Text)
 	case OutputChat:
-		return "  " + ev.Text
+		return "  " + renderMarkdownText(ev.Text)
 	case OutputFollowUpHeader:
 		return followUpStyle.Render("  💡 " + ev.Text)
 	case OutputFollowUpItem:
@@ -685,8 +685,12 @@ func renderOutputEvent(ev OutputEvent) string {
 		return sessionNameStyle.Render("  📛 " + ev.Text)
 	case OutputExecTime:
 		return dimStyle.Render("  ⏱  " + ev.Text)
+	case OutputTable:
+		return renderTable(ev.Text)
 	case OutputBlank:
 		return ""
+	case OutputDivider:
+		return fmt.Sprintf("  %s%s%s", ansiAccent, strings.Repeat("─", 44), ansiReset)
 	default:
 		return ev.Text
 	}

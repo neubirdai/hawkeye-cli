@@ -478,7 +478,7 @@ func (m model) handleInspectResult(msg inspectResultMsg) (tea.Model, tea.Cmd) {
 		}
 
 		if pc.FinalAnswer != "" {
-			rendered := renderMarkdown(pc.FinalAnswer, 76)
+			rendered := renderMarkdownBlock(pc.FinalAnswer)
 			cmds = append(cmds, tea.Println(""))
 			for _, line := range strings.Split(rendered, "\n") {
 				cmds = append(cmds, tea.Println("  "+line))
@@ -566,7 +566,7 @@ func (m model) handleSummaryResult(msg summaryResultMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if summary.Analysis != "" {
-		rendered := renderMarkdown(summary.Analysis, 76)
+		rendered := renderMarkdownBlock(summary.Analysis)
 		cmds = append(cmds, tea.Println(""))
 		for _, line := range strings.Split(rendered, "\n") {
 			cmds = append(cmds, tea.Println("  "+line))
