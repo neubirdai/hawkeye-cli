@@ -284,7 +284,7 @@ func (m *mockAPI) GetSessionReport(projectUUID string, sessionUUIDs []string) ([
 var _ api.HawkeyeAPI = (*mockAPI)(nil)
 
 func newTestModel() model {
-	m := initialModel("test", "")
+	m := initialModel("test", "", "")
 	m.cfg = &config.Config{
 		Server:    "http://localhost:8080",
 		Token:     "test-token",

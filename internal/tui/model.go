@@ -116,9 +116,11 @@ type model struct {
 	profile      string
 
 	// Command history
-	history      []string // stored command history
-	historyIdx   int      // current position in history (-1 = not browsing)
-	historySaved string   // saved input value when entering history mode
+	history      []string
+	historyIdx   int
+	historySaved string
+
+	resumeSessionID string
 
 	// Incident list state (modeIncidentList)
 	incidentList        []api.SessionInfo
@@ -127,7 +129,7 @@ type model struct {
 	incidentListHasMore bool
 }
 
-func initialModel(version, profile string) model {
+func initialModel(version, profile, resumeSessionID string) model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question or type /help..."
 	ti.Focus()
@@ -148,16 +150,17 @@ func initialModel(version, profile string) model {
 	}
 
 	return model{
-		input:      ti,
-		spinner:    sp,
-		version:    version,
-		profile:    profile,
-		cfg:        cfg,
-		client:     client,
-		mode:       modeIdle,
-		processor:  NewStreamProcessor(),
-		history:    make([]string, 0),
-		historyIdx: -1,
+		input:            ti,
+		spinner:          sp,
+		version:          version,
+		profile:          profile,
+		cfg:              cfg,
+		client:           client,
+		mode:             modeIdle,
+		processor:        NewStreamProcessor(),
+		history:          make([]string, 0),
+		historyIdx:       -1,
+		resumeSessionID:  resumeSessionID,
 	}
 }
 
@@ -184,6 +187,23 @@ func (m model) Init() tea.Cmd {
 			}
 			return nil
 		})
+	}
+	if m.resumeSessionID != "" && m.client != nil {
+		sessionUUID := m.resumeSessionID
+		m.sessionID = sessionUUID
+		m.resumeSessionID = ""
+		client := m.client
+		projectID := m.cfg.ProjectID
+		cmds = append(cmds,
+			tea.Println(statusStyle.Render(fmt.Sprintf("  ⟳ Resuming session %s...", truncateUUID(sessionUUID)))),
+			func() tea.Msg {
+				resp, err := client.SessionInspect(projectID, sessionUUID)
+				if err != nil {
+					return inspectResultMsg{err: err}
+				}
+				return inspectResultMsg{resp: resp}
+			},
+		)
 	}
 	return tea.Batch(cmds...)
 }
