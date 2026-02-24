@@ -112,3 +112,65 @@ func TestFilterSystemProjects(t *testing.T) {
 		})
 	}
 }
+
+func TestFindProject(t *testing.T) {
+	projects := []api.ProjectSpec{
+		{Name: "Production", UUID: "uuid-prod"},
+		{Name: "Staging", UUID: "uuid-staging"},
+		{Name: "Development", UUID: "uuid-dev"},
+	}
+
+	tests := []struct {
+		name     string
+		value    string
+		wantUUID string
+	}{
+		{
+			name:     "find by exact UUID",
+			value:    "uuid-prod",
+			wantUUID: "uuid-prod",
+		},
+		{
+			name:     "find by exact name",
+			value:    "Staging",
+			wantUUID: "uuid-staging",
+		},
+		{
+			name:     "find by name case insensitive",
+			value:    "production",
+			wantUUID: "uuid-prod",
+		},
+		{
+			name:     "find by name uppercase",
+			value:    "DEVELOPMENT",
+			wantUUID: "uuid-dev",
+		},
+		{
+			name:     "not found",
+			value:    "nonexistent",
+			wantUUID: "",
+		},
+		{
+			name:     "empty value",
+			value:    "",
+			wantUUID: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FindProject(projects, tt.value)
+			if tt.wantUUID == "" {
+				if got != nil {
+					t.Errorf("expected nil, got %+v", got)
+				}
+			} else {
+				if got == nil {
+					t.Errorf("expected project with UUID %q, got nil", tt.wantUUID)
+				} else if got.UUID != tt.wantUUID {
+					t.Errorf("UUID = %q, want %q", got.UUID, tt.wantUUID)
+				}
+			}
+		})
+	}
+}
