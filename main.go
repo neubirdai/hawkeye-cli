@@ -275,7 +275,7 @@ func cmdSet(args []string) error {
 		fmt.Println()
 		fmt.Println("Keys:")
 		fmt.Println("  server   Hawkeye server URL  (e.g. http://server:8080)")
-		fmt.Println("  project  Active project UUID")
+		fmt.Println("  project  Active project UUID or name")
 		fmt.Println("  token    JWT authentication token")
 		fmt.Println("  org      Organization UUID")
 		return nil
@@ -292,7 +292,22 @@ func cmdSet(args []string) error {
 	case "server":
 		cfg.Server = value
 	case "project":
-		cfg.ProjectID = value
+		// Validate that the project exists
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		client := api.NewClient(cfg)
+		resp, err := client.ListProjects()
+		if err != nil {
+			return fmt.Errorf("listing projects: %w", err)
+		}
+		projects := service.FilterSystemProjects(resp.Specs)
+		found := service.FindProject(projects, value)
+		if found == nil {
+			return fmt.Errorf("project %q not found", value)
+		}
+		cfg.ProjectID = found.UUID
+		cfg.ProjectName = found.Name
 	case "token":
 		cfg.Token = value
 	case "org":
@@ -305,7 +320,11 @@ func cmdSet(args []string) error {
 		return err
 	}
 
-	display.Success(fmt.Sprintf("%s set to %s", key, value))
+	if key == "project" {
+		display.Success(fmt.Sprintf("project set to %s (%s)", cfg.ProjectName, cfg.ProjectID))
+	} else {
+		display.Success(fmt.Sprintf("%s set to %s", key, value))
+	}
 	return nil
 }
 

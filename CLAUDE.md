@@ -30,6 +30,7 @@ make check      # Run lint then test — the single command to validate everythi
 
 ### When Adding or Modifying Functions
 
+- **Always add minimal, compact tests** for any code change. Extract testable logic into pure helper functions when possible.
 - Write table-driven tests for any new pure/deterministic function
 - Use stdlib `testing` + `net/http/httptest` only — zero external test dependencies
 - Use `t.Setenv("HOME", t.TempDir())` for config tests (isolates from real config)

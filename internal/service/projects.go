@@ -18,6 +18,18 @@ func FilterSystemProjects(projects []api.ProjectSpec) []api.ProjectSpec {
 	return filtered
 }
 
+// FindProject searches for a project by UUID or name (case-insensitive).
+// Returns nil if no match is found.
+func FindProject(projects []api.ProjectSpec, value string) *api.ProjectSpec {
+	for i := range projects {
+		p := &projects[i]
+		if p.UUID == value || strings.EqualFold(p.Name, value) {
+			return p
+		}
+	}
+	return nil
+}
+
 // ProjectDetailDisplay holds display-ready project detail info.
 type ProjectDetailDisplay struct {
 	UUID        string
