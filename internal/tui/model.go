@@ -62,6 +62,7 @@ var slashCommands = []slashCmd{
 	{"/investigate-alert", "Investigate an alert"},
 	{"/link", "Get web UI URL for session"},
 	{"/login", "Login to a Hawkeye server"},
+	{"/open", "Open session from web URL"},
 	{"/projects", "Select a project (interactive)"},
 	{"/prompts", "Browse investigation prompts"},
 	{"/queries", "Show investigation queries"},
