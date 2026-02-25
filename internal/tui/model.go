@@ -26,7 +26,7 @@ const (
 	modeLoginURL
 	modeLoginUser
 	modeLoginPass
-	modeIncidentList  // interactive incident selection list
+	modeIncidentList // interactive incident selection list
 	modeProjectSelect
 	modeSessionSelect
 )
@@ -1025,6 +1025,10 @@ func renderOutputEvent(ev OutputEvent) string {
 		return ""
 	case OutputDivider:
 		return fmt.Sprintf("  %s%s%s", ansiAccent, strings.Repeat("─", 44), ansiReset)
+	case OutputCodeFence:
+		return renderCodeFence(ev.Text)
+	case OutputCodeLine:
+		return renderCodeLine(ev.Text)
 	default:
 		return ev.Text
 	}

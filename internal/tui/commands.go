@@ -445,9 +445,9 @@ func (m model) renderIncidentList() string {
 		status := formatInvestigationStatus(s.InvestigationStatus)
 		padded := fmt.Sprintf("%-52s %s", name, status)
 		if i == m.incidentListIdx {
-			b.WriteString("  " + incidentRowSelectedStyle.Render("► "+padded) + "\n")
+			b.WriteString("  " + incidentRowSelectedStyle.Render("🦜 "+padded) + "\n")
 		} else {
-			b.WriteString("  " + incidentRowStyle.Render("  "+padded) + "\n")
+			b.WriteString("  " + incidentRowStyle.Render("   "+padded) + "\n")
 		}
 	}
 
