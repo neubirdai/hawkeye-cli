@@ -103,6 +103,10 @@ func main() {
 		err = cmdScore(args[1:])
 	case "link":
 		err = cmdLink(args[1:])
+	case "open":
+		err = cmdOpen(args[1:])
+	case "parse":
+		err = cmdParse(args[1:])
 	case "report":
 		err = cmdReport()
 	case "connections":
@@ -1301,6 +1305,108 @@ func cmdLink(args []string) error {
 	}
 
 	fmt.Println(url)
+	return nil
+}
+
+// ─── open / parse ───────────────────────────────────────────────────────────
+
+func parseAndValidateSessionURL(rawURL string) (cfg *config.Config, projectUUID, sessionUUID string, err error) {
+	host, projectUUID, sessionUUID, err := service.ParseSessionURL(rawURL)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("invalid session URL: %w", err)
+	}
+
+	cfg, err = config.Load(activeProfile)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, "", "", err
+	}
+
+	expectedBase := cfg.FrontendURL
+	if expectedBase == "" {
+		expectedBase = cfg.Server
+	}
+	expectedBase = strings.TrimRight(expectedBase, "/")
+	if idx := strings.Index(expectedBase, "/api"); idx > 0 {
+		expectedBase = expectedBase[:idx]
+	}
+
+	if !strings.EqualFold(host, expectedBase) {
+		profileHint := ""
+		if activeProfile != "" {
+			profileHint = " --profile " + activeProfile
+		}
+		return nil, "", "", fmt.Errorf(
+			"server mismatch: URL points to %s but you're logged into %s\n\n"+
+				"  Try: hawkeye --profile <name> open %s\n"+
+				"  Or:  hawkeye%s login %s -u <username> -p <password>",
+			host, expectedBase, rawURL, profileHint, host)
+	}
+
+	cfg.ProjectID = projectUUID
+	cfg.LastSession = sessionUUID
+	_ = cfg.Save()
+	return cfg, projectUUID, sessionUUID, nil
+}
+
+func cmdOpen(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye open <url>")
+		fmt.Println()
+		fmt.Println("Open a web console session URL in interactive mode.")
+		fmt.Println()
+		fmt.Println("Example:")
+		fmt.Println("  hawkeye open https://myenv.app.neubird.ai/console/project/abc-123/session/def-456?tab=rca")
+		fmt.Println("  hawkeye --profile staging open <url>")
+		return nil
+	}
+
+	_, _, sessionUUID, err := parseAndValidateSessionURL(args[0])
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{"session_uuid": sessionUUID, "url": args[0]})
+	}
+
+	display.Success(fmt.Sprintf("Opening session: %s", sessionUUID))
+	return tui.Run(version, activeProfile, sessionUUID)
+}
+
+func cmdParse(args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: hawkeye parse <url>")
+		fmt.Println()
+		fmt.Println("Parse a web console URL and set the project + session in config.")
+		fmt.Println("Then use 'inspect', 'summary', 'score', etc. on that session.")
+		fmt.Println()
+		fmt.Println("Example:")
+		fmt.Println("  hawkeye parse https://myenv.app.neubird.ai/console/project/abc-123/session/def-456?tab=rca")
+		fmt.Println("  hawkeye inspect   # inspects the parsed session")
+		return nil
+	}
+
+	_, projectUUID, sessionUUID, err := parseAndValidateSessionURL(args[0])
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{
+			"project_uuid": projectUUID,
+			"session_uuid": sessionUUID,
+			"url":          args[0],
+		})
+	}
+
+	display.Success(fmt.Sprintf("Project: %s", projectUUID))
+	display.Success(fmt.Sprintf("Session: %s", sessionUUID))
+	fmt.Println()
+	fmt.Printf("  %sNext:%s Run %shawkeye inspect%s to view session details.\n\n",
+		display.Dim, display.Reset, display.Cyan, display.Reset)
 	return nil
 }
 
@@ -2782,6 +2888,8 @@ func printUsage() {
     --project <uuid>                   Override project UUID
   queries [session-uuid]               Show investigation queries
   link [session-uuid]                  Get web UI URL for a session
+  open <url>                           Open a web console URL in interactive mode
+  parse <url>                          Parse a web console URL, set project + session
 
 %sSessions:%s
   sessions                  List recent investigation sessions

@@ -80,6 +80,8 @@ func (m model) dispatchCommand(input string) (tea.Model, tea.Cmd) {
 		return m.cmdSessionReport(args)
 	case "/incidents":
 		return m.cmdIncidents(args)
+	case "/open":
+		return m.cmdOpen(args)
 	case "/session":
 		return m.cmdSetSession(args)
 	case "/quit", "/exit", "/q":
@@ -110,6 +112,7 @@ func (m model) cmdHelp() (tea.Model, tea.Cmd) {
 		tea.Println("  " + pad(hintKeyStyle.Render("/summary <uuid>"), 30) + dimStyle.Render("Get session summary")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/score <uuid>"), 30) + dimStyle.Render("Show RCA quality scores")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/link <uuid>"), 30) + dimStyle.Render("Get web UI URL for session")),
+		tea.Println("  " + pad(hintKeyStyle.Render("/open <url>"), 30) + dimStyle.Render("Open session from web URL")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/report"), 30) + dimStyle.Render("Show incident analytics")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/connections"), 30) + dimStyle.Render("Manage data source connections")),
 		tea.Println("  " + pad(hintKeyStyle.Render("/incidents"), 30) + dimStyle.Render("Add incident tool connections (add)")),
@@ -1206,6 +1209,25 @@ func (m model) cmdLink(args []string) (tea.Model, tea.Cmd) {
 		tea.Println("  "+url),
 		tea.Println(""),
 	)
+}
+
+// ─── /open ──────────────────────────────────────────────────────────────────
+
+func (m model) cmdOpen(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		return m, tea.Println(warnMsgStyle.Render("  ! Usage: /open <url>"))
+	}
+
+	_, projectUUID, sessionUUID, err := service.ParseSessionURL(args[0])
+	if err != nil {
+		return m, tea.Println(errorMsgStyle.Render(fmt.Sprintf("  ✗ Invalid URL: %v", err)))
+	}
+
+	m.sessionID = sessionUUID
+	if m.cfg != nil {
+		m.cfg.ProjectID = projectUUID
+	}
+	return m.cmdInspect([]string{sessionUUID})
 }
 
 // ─── /report ────────────────────────────────────────────────────────────────
