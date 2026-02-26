@@ -23,7 +23,24 @@ func init() {
 	incidents.DefaultDataset = defaultIncidentDataset
 }
 
-var version = "0.1.0"
+// Build info - injected by GoReleaser via ldflags
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
+// versionString returns the formatted version output.
+// When commit is "none" (dev build), only shows version.
+// When commit is set (release build), shows version + commit + date.
+func versionString() string {
+	s := fmt.Sprintf("hawkeye %s", version)
+	if commit != "none" {
+		s += fmt.Sprintf("\n  commit: %s", commit)
+		s += fmt.Sprintf("\n  built:  %s", date)
+	}
+	return s
+}
 
 var activeProfile string
 var jsonOutput bool
@@ -132,7 +149,7 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	case "version", "--version", "-v":
-		fmt.Printf("hawkeye %s\n", version)
+		fmt.Println(versionString())
 	default:
 		display.Error(fmt.Sprintf("Unknown command: %s", args[0]))
 		printUsage()

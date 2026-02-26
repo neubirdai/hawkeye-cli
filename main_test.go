@@ -196,6 +196,97 @@ func TestPrintJSON(t *testing.T) {
 	}
 }
 
+func TestVersionString(t *testing.T) {
+	tests := []struct {
+		name       string
+		version    string
+		commit     string
+		date       string
+		wantPrefix string
+		wantCommit bool
+	}{
+		{
+			name:       "dev build",
+			version:    "dev",
+			commit:     "none",
+			date:       "unknown",
+			wantPrefix: "hawkeye dev",
+			wantCommit: false,
+		},
+		{
+			name:       "release build",
+			version:    "v1.2.3",
+			commit:     "abc1234",
+			date:       "2026-02-25T10:00:00Z",
+			wantPrefix: "hawkeye v1.2.3",
+			wantCommit: true,
+		},
+		{
+			name:       "dirty build from make",
+			version:    "v0.1.0-49-gb3df7c4-dirty",
+			commit:     "b3df7c4",
+			date:       "2026-02-26T02:18:39Z",
+			wantPrefix: "hawkeye v0.1.0-49-gb3df7c4-dirty",
+			wantCommit: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save and restore globals
+			origVersion, origCommit, origDate := version, commit, date
+			defer func() { version, commit, date = origVersion, origCommit, origDate }()
+
+			version = tt.version
+			commit = tt.commit
+			date = tt.date
+
+			got := versionString()
+
+			if !strings.HasPrefix(got, tt.wantPrefix) {
+				t.Errorf("versionString() = %q, want prefix %q", got, tt.wantPrefix)
+			}
+
+			hasCommit := strings.Contains(got, "commit:")
+			if hasCommit != tt.wantCommit {
+				t.Errorf("versionString() commit present = %v, want %v\noutput: %q", hasCommit, tt.wantCommit, got)
+			}
+
+			if tt.wantCommit {
+				if !strings.Contains(got, tt.commit) {
+					t.Errorf("versionString() should contain commit %q, got %q", tt.commit, got)
+				}
+				if !strings.Contains(got, tt.date) {
+					t.Errorf("versionString() should contain date %q, got %q", tt.date, got)
+				}
+			}
+		})
+	}
+}
+
+func TestVersionStringFormat(t *testing.T) {
+	// Save and restore globals
+	origVersion, origCommit, origDate := version, commit, date
+	defer func() { version, commit, date = origVersion, origCommit, origDate }()
+
+	version = "v1.0.0"
+	commit = "abc123"
+	date = "2026-01-01"
+
+	got := versionString()
+	lines := strings.Split(got, "\n")
+
+	// First line should be "hawkeye <version>"
+	if lines[0] != "hawkeye v1.0.0" {
+		t.Errorf("first line = %q, want %q", lines[0], "hawkeye v1.0.0")
+	}
+
+	// Should have exactly 3 lines for release build
+	if len(lines) != 3 {
+		t.Errorf("expected 3 lines, got %d: %q", len(lines), got)
+	}
+}
+
 func TestParseGlobalFlagsJSON(t *testing.T) {
 	tests := []struct {
 		name     string
