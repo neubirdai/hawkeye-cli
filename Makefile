@@ -1,9 +1,6 @@
 BINARY=hawkeye
-VERSION=0.1.0
 
-DOCKER_REPO=neubirdai/hawkeye-cli
-
-.PHONY: build clean install test lint check docker docker-push snap snap-upload
+.PHONY: build clean install test lint check release-snapshot release
 
 build:
 	go build -ldflags="-s -w" -o $(BINARY) .
@@ -13,6 +10,7 @@ install: build
 
 clean:
 	rm -f $(BINARY)
+	rm -rf dist/
 
 test:
 	go test ./... -count=1 -timeout 30s
@@ -22,22 +20,11 @@ lint:
 
 check: lint test
 
-# Cross-compile for common platforms
+release-snapshot:
+	goreleaser release --snapshot --clean
+
 release:
-	GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/$(BINARY)-linux-amd64 .
-	GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/$(BINARY)-linux-arm64 .
-	GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/$(BINARY)-darwin-amd64 .
-	GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/$(BINARY)-darwin-arm64 .
-	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/$(BINARY)-windows-amd64.exe .
-
-docker:
-	docker buildx build --platform linux/amd64,linux/arm64 -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest --load .
-
-docker-push:
-	docker buildx build --platform linux/amd64,linux/arm64 -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest --push .
-
-snap:
-	snapcraft pack
-
-snap-upload:
-	snapcraft upload $(BINARY)-cli_$(VERSION)_*.snap --release=edge
+	@test -n "$(VERSION)" || (echo "Usage: make release VERSION=0.2.0" && exit 1)
+	git tag -a "v$(VERSION)" -m "v$(VERSION)"
+	git push origin "v$(VERSION)"
+	goreleaser release --clean
