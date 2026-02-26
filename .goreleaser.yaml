@@ -1,6 +1,3 @@
-# GoReleaser configuration for Hawkeye CLI
-# See: https://goreleaser.com
-
 version: 2
 
 project_name: hawkeye
@@ -22,13 +19,16 @@ builds:
       - -X main.version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
     files:
       - README.md
+      - LICENSE
 
 checksum:
   name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
@@ -45,21 +45,57 @@ changelog:
       - Merge pull request
       - Merge branch
 
-# Homebrew tap configuration
-brews:
+homebrew_casks:
   - name: neubird-hawkeye
+    binaries:
+      - hawkeye
     repository:
       owner: neubirdai
       name: homebrew-hawkeye
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/neubirdai/hawkeye-cli"
     description: "AI-powered incident investigation CLI for Neubird Hawkeye"
-    license: "MIT"
-    test: |
-      system "#{bin}/hawkeye", "help"
-    install: |
-      bin.install "hawkeye"
+
+dockers_v2:
+  - images:
+      - "neubirdai/hawkeye-cli"
+    tags:
+      - "v{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    disable: "{{ .IsSnapshot }}"
+
+snapcrafts:
+  - name: hawkeye-cli
+    summary: AI-powered SRE incident investigation CLI
+    description: |
+      Hawkeye CLI is a command-line client for the Neubird Hawkeye AI SRE platform.
+      It enables AI-powered incident investigations with real-time SSE streaming,
+      interactive session management, and chain-of-thought reasoning visualization.
+    grade: stable
+    confinement: strict
+    license: MIT
+    apps:
+      hawkeye-cli:
+        command: hawkeye
+        plugs:
+          - network
+          - home
+
+nfpms:
+  - package_name: hawkeye-cli
+    vendor: Neubird AI
+    homepage: "https://github.com/neubirdai/hawkeye-cli"
+    maintainer: "Neubird AI <support@neubird.com>"
+    description: "AI-powered incident investigation CLI for Neubird Hawkeye"
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
 
 release:
   github:
