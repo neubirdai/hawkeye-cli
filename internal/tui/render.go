@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // ─── Welcome Screen ─────────────────────────────────────────────────────────
@@ -286,9 +287,22 @@ func renderMarkdownLine(line string, state *mdState) string {
 
 // renderMarkdownText renders a single line with list/header detection + inline formatting.
 // This is a stateless version for streaming (doesn't track code block state).
+// Code block fences are rendered as borders; content inside requires state tracking
+// which is handled by the StreamProcessor's codeBlockActive flag.
 // See docs/tui-color-format-guide.md for rendering rules.
 func renderMarkdownText(line string) string {
 	trimmed := strings.TrimSpace(line)
+
+	// Code block fences — render as green borders
+	// Note: The StreamProcessor tracks inCodeBlock state and calls renderCodeLine for content
+	if strings.HasPrefix(trimmed, "```") {
+		lang := strings.TrimSpace(trimmed[3:])
+		if lang != "" {
+			return fmt.Sprintf("%s┌─ %s ─%s", ansiSuccess, lang, ansiReset)
+		}
+		// Could be opening or closing fence - StreamProcessor determines which
+		return fmt.Sprintf("%s───%s", ansiSuccess, ansiReset)
+	}
 
 	// Headers — bold only, no color (all levels)
 	if strings.HasPrefix(trimmed, "###### ") {
@@ -349,6 +363,27 @@ func renderMarkdownText(line string) string {
 
 	// Regular text — body color
 	return fmt.Sprintf("%s%s%s", ansiBody, renderInlineMarkdown(line), ansiReset)
+}
+
+// renderCodeFence renders a code block fence (``` with optional language).
+// Opening fence shows language label; closing fence shows bottom border.
+func renderCodeFence(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "```") {
+		return line
+	}
+	lang := strings.TrimSpace(trimmed[3:])
+	if lang != "" {
+		// Opening fence with language
+		return fmt.Sprintf("    %s┌─ %s ─%s", ansiSuccess, lang, ansiReset)
+	}
+	// Plain fence (could be opening or closing - StreamProcessor determines context)
+	return fmt.Sprintf("    %s└──%s", ansiSuccess, ansiReset)
+}
+
+// renderCodeLine renders a line inside a code block with green border.
+func renderCodeLine(line string) string {
+	return fmt.Sprintf("    %s│%s %s%s%s", ansiSuccess, ansiReset, ansiBody, line, ansiReset)
 }
 
 // renderInlineMarkdown handles inline formatting: **bold**, *italic*, `code`, [links](url)
@@ -460,18 +495,26 @@ func renderTable(raw string) string {
 		// Strip outer pipes
 		trimmed = strings.Trim(trimmed, "|")
 		parts := strings.Split(trimmed, "|")
-		cells := make([]string, len(parts))
+		cells := make([]string, 0, len(parts))
 		isSep := true
-		for i, p := range parts {
-			cells[i] = strings.TrimSpace(p)
+		for _, p := range parts {
+			cell := strings.TrimSpace(p)
+			cells = append(cells, cell)
 			// A separator row has cells containing only dashes/colons
-			if len(cells[i]) > 0 {
-				for _, c := range cells[i] {
+			if len(cell) > 0 {
+				for _, c := range cell {
 					if c != '-' && c != ':' && c != ' ' {
 						isSep = false
 					}
 				}
 			}
+		}
+		// Drop empty trailing cells (from trailing pipes like "| a | b |")
+		for len(cells) > 0 && cells[len(cells)-1] == "" {
+			cells = cells[:len(cells)-1]
+		}
+		if len(cells) == 0 {
+			continue
 		}
 		rows = append(rows, row{cells: cells, isSep: isSep})
 	}
@@ -480,11 +523,21 @@ func renderTable(raw string) string {
 		return ""
 	}
 
-	// Compute natural column widths across all non-separator rows.
+	// Use header row's column count as authoritative (first non-separator row).
+	// This prevents malformed rows with extra columns from expanding the table.
 	numCols := 0
 	for _, r := range rows {
-		if len(r.cells) > numCols {
+		if !r.isSep {
 			numCols = len(r.cells)
+			break
+		}
+	}
+	if numCols == 0 {
+		// Fallback: find max columns if no non-separator row found
+		for _, r := range rows {
+			if len(r.cells) > numCols {
+				numCols = len(r.cells)
+			}
 		}
 	}
 	widths := make([]int, numCols)
@@ -493,18 +546,30 @@ func renderTable(raw string) string {
 			continue
 		}
 		for i, cell := range r.cells {
-			if i < numCols && len(cell) > widths[i] {
-				widths[i] = len(cell)
+			cellWidth := utf8.RuneCountInString(cell)
+			if i < numCols && cellWidth > widths[i] {
+				widths[i] = cellWidth
 			}
 		}
 	}
 
 	// Cap total table width to fit a reasonable terminal.
 	// Overhead per column: 1 border + 2 padding spaces = 3; plus 1 for the final border.
-	const maxTableWidth = 100 // content area (excluding table's own indent)
-	const minColWidth = 8     // never shrink a column below this
+	const maxTableWidth = 140 // content area (excluding table's own indent)
 	overhead := 3*numCols + 1
 	available := maxTableWidth - overhead
+
+	// Dynamic minimum column width based on number of columns:
+	// - 2 columns: 50 chars each (readable)
+	// - 3 columns: 35 chars each
+	// - 4+ columns: 25 chars each
+	minColWidth := 25
+	if numCols == 2 {
+		minColWidth = 50
+	} else if numCols == 3 {
+		minColWidth = 35
+	}
+
 	if available < numCols*minColWidth {
 		available = numCols * minColWidth
 	}
@@ -522,21 +587,50 @@ func renderTable(raw string) string {
 				maxNat = w
 			}
 		}
-		lo, hi := minColWidth, maxNat
-		colCap := maxNat
-		for lo <= hi {
-			mid := (lo + hi) / 2
-			total := 0
-			for _, w := range widths {
-				total += min(w, mid)
-			}
-			if total <= available {
-				colCap = mid
-				hi = mid - 1
+
+		// Calculate the sum of columns that are already smaller than minColWidth
+		// These won't be capped, so we need to account for them
+		fixedSum := 0
+		cappableCols := 0
+		for _, w := range widths {
+			if w <= minColWidth {
+				fixedSum += w
 			} else {
-				lo = mid + 1
+				cappableCols++
 			}
 		}
+
+		// Determine the effective cap: distribute remaining space among cappable columns
+		remainingSpace := available - fixedSum
+		var colCap int
+		if cappableCols > 0 && remainingSpace > 0 {
+			// Binary search for the LARGEST cap that keeps total <= available
+			// We want to find the maximum cap value where the total fits
+			lo, hi := 1, maxNat
+			colCap = 1 // default to minimum if nothing fits
+			for lo <= hi {
+				mid := (lo + hi) / 2
+				total := 0
+				for _, w := range widths {
+					total += min(w, mid)
+				}
+				if total <= available {
+					// This cap works, try a larger one
+					colCap = mid
+					lo = mid + 1
+				} else {
+					// Too large, try smaller
+					hi = mid - 1
+				}
+			}
+		} else {
+			// Fallback: distribute available space equally
+			colCap = available / numCols
+			if colCap < 1 {
+				colCap = 1
+			}
+		}
+
 		for i, w := range widths {
 			if w > colCap {
 				widths[i] = colCap
@@ -616,7 +710,8 @@ func renderTable(raw string) string {
 				} else {
 					rendered = ansiBody + cell + ansiReset
 				}
-				padding := strings.Repeat(" ", widths[i]-len(cell))
+				cellWidth := utf8.RuneCountInString(cell)
+				padding := strings.Repeat(" ", widths[i]-cellWidth)
 				out.WriteString(" " + rendered + padding + " ")
 				out.WriteString(ansiAccent + "│" + ansiReset)
 			}
@@ -628,29 +723,32 @@ func renderTable(raw string) string {
 	return out.String()
 }
 
-// wrapCell splits text into lines of at most maxWidth characters.
+// wrapCell splits text into lines of at most maxWidth runes (characters).
 // It tries to break at word boundaries (spaces); falls back to hard wrap
 // when no good break point is found in the second half of the line.
 func wrapCell(text string, maxWidth int) []string {
-	if maxWidth <= 0 || len(text) <= maxWidth {
+	runeCount := utf8.RuneCountInString(text)
+	if maxWidth <= 0 || runeCount <= maxWidth {
 		return []string{text}
 	}
+
 	var lines []string
-	for len(text) > maxWidth {
+	runes := []rune(text)
+	for len(runes) > maxWidth {
 		split := maxWidth
 		// Walk back from maxWidth looking for a space to break at.
-		for split > maxWidth/2 && text[split] != ' ' {
+		for split > maxWidth/2 && runes[split] != ' ' {
 			split--
 		}
 		if split <= maxWidth/2 {
 			// No good break point — hard wrap at maxWidth.
 			split = maxWidth
 		}
-		lines = append(lines, text[:split])
-		text = strings.TrimLeft(text[split:], " ")
+		lines = append(lines, string(runes[:split]))
+		runes = []rune(strings.TrimLeft(string(runes[split:]), " "))
 	}
-	if len(text) > 0 {
-		lines = append(lines, text)
+	if len(runes) > 0 {
+		lines = append(lines, string(runes))
 	}
 	return lines
 }

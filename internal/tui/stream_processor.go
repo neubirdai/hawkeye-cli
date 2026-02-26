@@ -25,6 +25,8 @@ const (
 	OutputBlank                            // Blank separator line
 	OutputDivider                          // Horizontal rule between major sections (COT→COT, COT→chat)
 	OutputTable                            // Fully formatted table (all rows buffered + rendered)
+	OutputCodeFence                        // Code block fence (``` with optional language)
+	OutputCodeLine                         // Line inside a code block
 )
 
 // OutputEvent is a structured event emitted by the StreamProcessor.
@@ -46,6 +48,7 @@ type OutputEvent struct {
 type StreamProcessor struct {
 	// COT state
 	activeCotID   string
+	lastCotID     string            // tracks last COT ID for chat transition divider
 	cotAccum      map[string]string // accumulated investigation text per COT ID
 	cotBuffers    map[string]string // partial line buffer per COT ID
 	cotDescShown  map[string]bool
@@ -61,6 +64,9 @@ type StreamProcessor struct {
 
 	// Table state — rows buffered until the table ends, then emitted as OutputTable
 	tableBuffer []string
+
+	// Code block state — tracks whether we're inside a fenced code block
+	inCodeBlock bool
 
 	// Gating
 	seenSources     map[string]bool
@@ -222,8 +228,11 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 	var out []OutputEvent
 
 	// Detect new COT step: flush the previous step.
+	// Skip this for cot_end events that are for a different (stale) COT -
+	// these are late arrivals for already-superseded steps.
 	isNewStep := sp.activeCotID != "" && cotID != sp.activeCotID
-	if isNewStep {
+	isStaleCotEnd := msg.eventType == "cot_end" && isNewStep
+	if isNewStep && !isStaleCotEnd {
 		out = append(out, sp.flushCOTBuffer(sp.activeCotID)...)
 		sp.cotStepActive = false
 		sp.cotTextActive = false
@@ -231,7 +240,8 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 		out = append(out, OutputEvent{Type: OutputDivider})
 	}
 
-	if sp.activeCotID != cotID {
+	// Don't update activeCotID for stale cot_end events
+	if sp.activeCotID != cotID && !isStaleCotEnd {
 		sp.activeCotID = cotID
 	}
 
@@ -278,15 +288,31 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 					return // stop processing, everything is buffered
 				}
 				// Route table rows to shared table buffer; flush on non-table line
-				if strings.HasPrefix(trimmed, "|") {
+				if strings.HasPrefix(trimmed, "|") && !sp.inCodeBlock {
 					sp.tableBuffer = append(sp.tableBuffer, line)
 				} else {
 					out = append(out, sp.flushTableBuffer()...)
-					out = append(out, OutputEvent{
-						Type:  OutputCOTText,
-						Text:  line,
-						CotID: cotID,
-					})
+					// Check for code block fences
+					if strings.HasPrefix(trimmed, "```") {
+						sp.inCodeBlock = !sp.inCodeBlock
+						out = append(out, OutputEvent{
+							Type:  OutputCodeFence,
+							Text:  line,
+							CotID: cotID,
+						})
+					} else if sp.inCodeBlock {
+						out = append(out, OutputEvent{
+							Type:  OutputCodeLine,
+							Text:  line,
+							CotID: cotID,
+						})
+					} else {
+						out = append(out, OutputEvent{
+							Type:  OutputCOTText,
+							Text:  line,
+							CotID: cotID,
+						})
+					}
 				}
 			} else {
 				sp.cotBuffers[cotID] = line
@@ -298,7 +324,13 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 	case "cot_start":
 		sp.cotDeltaMode = true // mark that we're using delta protocol
 		sp.cotStepActive = true
+		sp.chatStreaming = false // reset chat streaming when COT starts
 		showHeader()
+		// Process any initial investigation content (e.g., "No results")
+		if investigation != "" && !isTrivialContent(investigation) {
+			sp.cotTextActive = true
+			printLines(investigation)
+		}
 
 	case "cot_delta":
 		showHeader()
@@ -308,10 +340,18 @@ func (sp *StreamProcessor) handleCOT(msg streamChunkMsg) []OutputEvent {
 		}
 
 	case "cot_end":
-		out = append(out, sp.flushCOTBuffer(cotID)...)
-		sp.cotStepActive = false
-		sp.cotTextActive = false
-		out = append(out, sp.flushPendingProgress()...)
+		// Only flush and clear state if this is the currently active COT.
+		// Don't add divider if we're ending an old COT that's no longer active
+		// (which happens when backend sends cot_end for a previous step after
+		// a new step has already started).
+		if cotID == sp.activeCotID {
+			out = append(out, sp.flushCOTBuffer(cotID)...)
+			sp.cotStepActive = false
+			sp.cotTextActive = false
+			out = append(out, sp.flushPendingProgress()...)
+		}
+		// Always record that a COT ended (for chat transition divider)
+		sp.lastCotID = cotID
 
 	default:
 		// Legacy non-delta: investigation contains full accumulated text.
@@ -355,6 +395,11 @@ func (sp *StreamProcessor) handleChat(msg streamChunkMsg) []OutputEvent {
 		sp.cotStepActive = false
 		sp.cotTextActive = false
 		out = append(out, OutputEvent{Type: OutputDivider})
+		sp.lastCotID = "" // consumed
+	} else if sp.lastCotID != "" && !sp.chatStreaming {
+		// COT already ended via cot_end but chat hasn't started yet - add divider
+		out = append(out, OutputEvent{Type: OutputDivider})
+		sp.lastCotID = "" // consumed
 	}
 	out = append(out, sp.flushPendingProgress()...)
 
@@ -389,12 +434,12 @@ func (sp *StreamProcessor) handleChat(msg streamChunkMsg) []OutputEvent {
 }
 
 // routeChatLine routes a completed chat line — buffering table rows or flushing
-// the table when a non-table line is encountered.
+// the table when a non-table line is encountered. Also handles code block state.
 func (sp *StreamProcessor) routeChatLine(line string) []OutputEvent {
 	trimmed := strings.TrimSpace(line)
-	isTableRow := strings.HasPrefix(trimmed, "|")
 
-	if isTableRow {
+	// Table rows (but not inside code blocks)
+	if strings.HasPrefix(trimmed, "|") && !sp.inCodeBlock {
 		sp.tableBuffer = append(sp.tableBuffer, line)
 		return nil
 	}
@@ -404,7 +449,16 @@ func (sp *StreamProcessor) routeChatLine(line string) []OutputEvent {
 	if len(sp.tableBuffer) > 0 {
 		out = append(out, sp.flushTableBuffer()...)
 	}
-	out = append(out, OutputEvent{Type: OutputChat, Text: line})
+
+	// Check for code block fences
+	if strings.HasPrefix(trimmed, "```") {
+		sp.inCodeBlock = !sp.inCodeBlock
+		out = append(out, OutputEvent{Type: OutputCodeFence, Text: line})
+	} else if sp.inCodeBlock {
+		out = append(out, OutputEvent{Type: OutputCodeLine, Text: line})
+	} else {
+		out = append(out, OutputEvent{Type: OutputChat, Text: line})
+	}
 	return out
 }
 

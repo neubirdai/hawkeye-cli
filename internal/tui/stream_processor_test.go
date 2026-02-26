@@ -768,6 +768,99 @@ func TestNoDividerWithoutCOT(t *testing.T) {
 	}
 }
 
+// ─── Code Blocks ──────────────────────────────────────────────────────────────
+
+func TestCodeBlockInChat(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// Code block with language
+	out := sp.Process(chatDeltaMsg("```plaintext\ncode line 1\ncode line 2\n```\nafter code\n"))
+
+	// Should have code fence events
+	if !hasType(out, OutputCodeFence) {
+		t.Error("expected OutputCodeFence for opening fence")
+	}
+	if !hasType(out, OutputCodeLine) {
+		t.Error("expected OutputCodeLine for code content")
+	}
+	if !hasType(out, OutputChat) {
+		t.Error("expected OutputChat for content after code block")
+	}
+}
+
+func TestCodeBlockInCOT(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// COT with code block
+	out := sp.Process(cotDeltaMsg("cot1", "```bash\necho hello\n```\n"))
+
+	if !hasType(out, OutputCodeFence) {
+		t.Error("expected OutputCodeFence in COT")
+	}
+	if !hasType(out, OutputCodeLine) {
+		t.Error("expected OutputCodeLine in COT")
+	}
+}
+
+func TestCodeBlockPreventsPipeAsTable(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// Pipe character inside code block should NOT be treated as table
+	out := sp.Process(chatDeltaMsg("```bash\necho | grep foo\n```\n"))
+
+	// Should NOT emit OutputTable
+	if hasType(out, OutputTable) {
+		t.Error("pipe inside code block should not be treated as table")
+	}
+	// Should emit code line
+	if !hasType(out, OutputCodeLine) {
+		t.Error("expected OutputCodeLine for pipe inside code block")
+	}
+}
+
+func TestCotEndForStaleCOTNoDivider(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// Start COT A
+	sp.Process(cotStartMsg("cotA", "Step A"))
+	sp.Process(cotDeltaMsg("cotA", "content A\n"))
+
+	// New COT B arrives (this adds a divider between A and B)
+	out := sp.Process(cotStartMsg("cotB", "Step B"))
+	dividerCount := 0
+	for _, ev := range out {
+		if ev.Type == OutputDivider {
+			dividerCount++
+		}
+	}
+	if dividerCount != 1 {
+		t.Errorf("expected 1 divider between COT steps, got %d", dividerCount)
+	}
+
+	// Now cot_end for A arrives (stale) - should NOT add another divider
+	out = sp.Process(cotEndMsg("cotA"))
+	for _, ev := range out {
+		if ev.Type == OutputDivider {
+			t.Error("cot_end for stale COT should not emit a divider")
+		}
+	}
+}
+
+func TestDividerBeforeChatAfterCotEnd(t *testing.T) {
+	sp := NewStreamProcessor()
+
+	// COT with delta protocol
+	sp.Process(cotStartMsg("cot1", "Analyzing"))
+	sp.Process(cotDeltaMsg("cot1", "some text\n"))
+	sp.Process(cotEndMsg("cot1"))
+
+	// Chat arrives after cot_end - should still get a divider
+	out := sp.Process(chatDeltaMsg("Summary line\n"))
+	if !hasType(out, OutputDivider) {
+		t.Error("expected OutputDivider when chat starts after cot_end")
+	}
+}
+
 func TestLastStatus(t *testing.T) {
 	sp := NewStreamProcessor()
 
