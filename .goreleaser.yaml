@@ -2,9 +2,15 @@ version: 2
 
 project_name: hawkeye
 
+before:
+  hooks:
+    - go mod tidy
+    - go test ./... -count=1
+
 builds:
-  - binary: hawkeye
+  - id: hawkeye
     main: .
+    binary: hawkeye
     env:
       - CGO_ENABLED=0
     goos:
@@ -17,56 +23,95 @@ builds:
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
 
 archives:
-  - formats:
+  - id: default
+    formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
     format_overrides:
       - goos: windows
         formats:
           - zip
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
     files:
       - README.md
       - LICENSE
 
 checksum:
-  name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
-  algorithm: sha256
+  name_template: 'checksums.txt'
 
 changelog:
   sort: asc
-  use: github
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
       - Merge pull request
       - Merge branch
 
-homebrew_casks:
+release:
+  github:
+    owner: neubirdai
+    name: hawkeye-cli
+  draft: false
+  prerelease: auto
+  name_template: "{{.Tag}}"
+
+brews:
   - name: neubird-hawkeye
-    binaries:
-      - hawkeye
     repository:
       owner: neubirdai
       name: homebrew-hawkeye
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Casks
-    homepage: "https://github.com/neubirdai/hawkeye-cli"
-    description: "AI-powered incident investigation CLI for Neubird Hawkeye"
+    directory: Formula
+    homepage: "https://neubird.com"
+    description: "AI-powered SRE incident investigation CLI for Neubird Hawkeye"
+    license: "MIT"
+    install: |
+      bin.install "hawkeye"
+    test: |
+      system "#{bin}/hawkeye", "help"
 
-dockers_v2:
-  - images:
-      - "neubirdai/hawkeye-cli"
-    tags:
-      - "v{{ .Version }}"
-      - latest
-    platforms:
-      - linux/amd64
-      - linux/arm64
-    disable: "{{ .IsSnapshot }}"
+dockers:
+  - image_templates:
+      - "neubirdai/hawkeye-cli:{{ .Tag }}-amd64"
+      - "ghcr.io/neubirdai/hawkeye-cli:{{ .Tag }}-amd64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    goarch: amd64
+
+  - image_templates:
+      - "neubirdai/hawkeye-cli:{{ .Tag }}-arm64"
+      - "ghcr.io/neubirdai/hawkeye-cli:{{ .Tag }}-arm64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    goarch: arm64
+
+docker_manifests:
+  - name_template: "neubirdai/hawkeye-cli:{{ .Tag }}"
+    image_templates:
+      - "neubirdai/hawkeye-cli:{{ .Tag }}-amd64"
+      - "neubirdai/hawkeye-cli:{{ .Tag }}-arm64"
+
+  - name_template: "neubirdai/hawkeye-cli:latest"
+    image_templates:
+      - "neubirdai/hawkeye-cli:{{ .Tag }}-amd64"
+      - "neubirdai/hawkeye-cli:{{ .Tag }}-arm64"
+
+  - name_template: "ghcr.io/neubirdai/hawkeye-cli:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/neubirdai/hawkeye-cli:{{ .Tag }}-amd64"
+      - "ghcr.io/neubirdai/hawkeye-cli:{{ .Tag }}-arm64"
+
+  - name_template: "ghcr.io/neubirdai/hawkeye-cli:latest"
+    image_templates:
+      - "ghcr.io/neubirdai/hawkeye-cli:{{ .Tag }}-amd64"
+      - "ghcr.io/neubirdai/hawkeye-cli:{{ .Tag }}-arm64"
 
 snapcrafts:
   - name: hawkeye-cli
@@ -96,11 +141,3 @@ nfpms:
       - deb
       - rpm
     bindir: /usr/bin
-
-release:
-  github:
-    owner: neubirdai
-    name: hawkeye-cli
-  draft: false
-  prerelease: auto
-  mode: replace
