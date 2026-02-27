@@ -11,6 +11,7 @@ import (
 	"hawkeye-cli/internal/service"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -83,8 +84,9 @@ type model struct {
 	height int
 
 	// Bubble Tea components
-	input   textinput.Model
-	spinner spinner.Model
+	input      textarea.Model  // multiline input for prompts
+	loginInput textinput.Model // single-line input for login flow
+	spinner    spinner.Model
 
 	// App state
 	mode      appMode
@@ -131,13 +133,28 @@ type model struct {
 }
 
 func initialModel(version, profile, resumeSessionID string) model {
-	ti := textinput.New()
-	ti.Placeholder = "Ask a question or type /help..."
-	ti.Focus()
-	ti.CharLimit = 4096
-	ti.Prompt = "❯ "
-	ti.PromptStyle = promptSymbol
-	ti.Cursor.Style = lipgloss.NewStyle().Foreground(colorOrange)
+	// Multiline textarea for prompts
+	ta := textarea.New()
+	ta.Placeholder = "Ask a question or type /help..."
+	ta.Focus()
+	ta.CharLimit = 4096
+	ta.SetWidth(80)
+	ta.SetHeight(1) // Start with single line, grows dynamically
+	ta.ShowLineNumbers = false
+	ta.Prompt = "❯ "
+	ta.FocusedStyle.Prompt = promptSymbol
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // No highlight on cursor line
+	ta.FocusedStyle.Base = lipgloss.NewStyle()       // No base styling
+	ta.BlurredStyle = ta.FocusedStyle
+	ta.Cursor.Style = lipgloss.NewStyle().Foreground(colorOrange)
+
+	// Single-line input for login flow
+	li := textinput.New()
+	li.Placeholder = ""
+	li.CharLimit = 256
+	li.Prompt = "❯ "
+	li.PromptStyle = promptSymbol
+	li.Cursor.Style = lipgloss.NewStyle().Foreground(colorOrange)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -151,7 +168,8 @@ func initialModel(version, profile, resumeSessionID string) model {
 	}
 
 	return model{
-		input:           ti,
+		input:           ta,
+		loginInput:      li,
 		spinner:         sp,
 		version:         version,
 		profile:         profile,
@@ -169,7 +187,7 @@ func initialModel(version, profile, resumeSessionID string) model {
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		textinput.Blink,
+		textarea.Blink,
 		m.spinner.Tick,
 	}
 	// If we have a project ID but no project name, fetch it in the background
@@ -224,7 +242,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.Width = m.width - 6
+		m.input.SetWidth(m.width - 6)
+		m.loginInput.Width = m.width - 6
 
 		if !m.ready {
 			m.ready = true
@@ -298,9 +317,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.mode == modeLoginURL || m.mode == modeLoginUser || m.mode == modeLoginPass {
 				m.mode = modeIdle
-				m.input.Placeholder = "Ask a question or type /help..."
-				m.input.SetValue("")
-				m.input.EchoMode = textinput.EchoNormal
+				m.loginInput.SetValue("")
+				m.loginInput.EchoMode = textinput.EchoNormal
 				cmds = append(cmds, tea.Println(warnMsgStyle.Render("  ! Login cancelled.")))
 				return m, tea.Batch(cmds...)
 			}
@@ -343,7 +361,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.mode == modeIdle && len(m.history) > 0 {
+			// History navigation only when input is single-line (no newlines)
+			if m.mode == modeIdle && len(m.history) > 0 && !strings.Contains(m.input.Value(), "\n") {
 				m.cmdMenuOpen = false
 				if m.historyIdx == -1 {
 					m.historySaved = m.input.Value()
@@ -352,7 +371,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.historyIdx--
 				}
 				m.input.SetValue(m.history[m.historyIdx])
-				m.input.CursorEnd()
 				return m, nil
 			}
 
@@ -375,7 +393,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.mode == modeIdle && m.historyIdx != -1 {
+			// History navigation only when input is single-line (no newlines)
+			if m.mode == modeIdle && m.historyIdx != -1 && !strings.Contains(m.input.Value(), "\n") {
 				m.historyIdx++
 				if m.historyIdx >= len(m.history) {
 					m.historyIdx = -1
@@ -384,7 +403,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.input.SetValue(m.history[m.historyIdx])
 				}
-				m.input.CursorEnd()
 				return m, nil
 			}
 
@@ -397,14 +415,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						idx = 0
 					}
 					m.input.SetValue(matches[idx].name + " ")
-					m.input.CursorEnd()
 					m.cmdMenuOpen = false
 					m.cmdMenuIdx = 0
 				}
 				return m, nil
 			}
 
+		case tea.KeyShiftTab:
+			// Shift+Tab does nothing special
+			return m, nil
+
+		case tea.KeyCtrlJ:
+			// Ctrl+J inserts newline (works in all terminals)
+			if m.mode == modeIdle {
+				m.insertNewline()
+				return m, nil
+			}
+
 		case tea.KeyEnter:
+			// In login modes, handle Enter via loginInput
+			if m.mode == modeLoginURL || m.mode == modeLoginUser || m.mode == modeLoginPass {
+				value := strings.TrimSpace(m.loginInput.Value())
+				if value == "" {
+					return m, nil
+				}
+				m.loginInput.SetValue("")
+				switch m.mode {
+				case modeLoginURL:
+					return m.handleLoginURLSubmit(value)
+				case modeLoginUser:
+					return m.handleLoginUserSubmit(value)
+				case modeLoginPass:
+					return m.handleLoginPassSubmit(value)
+				}
+			}
+
+			// Alt+Enter inserts newline instead of submitting
+			if msg.Alt {
+				m.insertNewline()
+				return m, nil
+			}
+
 			if m.mode == modeSessionSelect && len(m.sessionList) > 0 {
 				selected := m.sessionList[m.sessionListIdx]
 				m.sessionID = selected.SessionUUID
@@ -436,7 +487,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				matches := matchCommands(m.input.Value())
 				if m.cmdMenuIdx < len(matches) {
 					m.input.SetValue(matches[m.cmdMenuIdx].name + " ")
-					m.input.CursorEnd()
 					m.cmdMenuOpen = false
 					m.cmdMenuIdx = 0
 					return m, nil
@@ -460,19 +510,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.historySaved = ""
 
 			m.input.SetValue("")
+			m.input.SetHeight(1) // Reset to single line after submit
 			m.cmdMenuOpen = false
 			m.cmdMenuIdx = 0
 
-			switch m.mode {
-			case modeLoginURL:
-				return m.handleLoginURLSubmit(value)
-			case modeLoginUser:
-				return m.handleLoginUserSubmit(value)
-			case modeLoginPass:
-				return m.handleLoginPassSubmit(value)
-			default:
-				return m.dispatchInput(value)
-			}
+			return m.dispatchInput(value)
 
 		}
 
@@ -655,9 +697,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Update sub-components
 	var cmd tea.Cmd
 
-	if m.mode != modeStreaming {
-		m.input, cmd = m.input.Update(msg)
-		cmds = append(cmds, cmd)
+	// Don't pass Enter key to textarea (we handle it for submit)
+	// Only pass it if we want to insert a newline (Shift+Enter or Alt+Enter)
+	shouldPassToInput := true
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && m.mode == modeIdle {
+		if keyMsg.Type == tea.KeyEnter && !keyMsg.Alt {
+			// Plain Enter = submit, don't pass to textarea
+			shouldPassToInput = false
+		}
+	}
+
+	if m.mode != modeStreaming && shouldPassToInput {
+		// Use loginInput for login modes, otherwise use textarea
+		if m.mode == modeLoginURL || m.mode == modeLoginUser || m.mode == modeLoginPass {
+			m.loginInput, cmd = m.loginInput.Update(msg)
+			cmds = append(cmds, cmd)
+		} else {
+			m.input, cmd = m.input.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	m.spinner, cmd = m.spinner.Update(msg)
@@ -682,6 +740,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cmdMenuOpen = false
 			m.cmdMenuIdx = 0
 		}
+
+		// Dynamically adjust textarea height based on content
+		m.updateInputHeight(newVal)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -726,12 +787,15 @@ func (m model) View() string {
 		s.WriteString(m.renderProjectList())
 	} else if m.mode == modeSessionSelect {
 		s.WriteString(m.renderSessionList())
+	} else if m.mode == modeLoginURL || m.mode == modeLoginUser || m.mode == modeLoginPass {
+		s.WriteString(m.loginInput.View())
 	} else {
 		s.WriteString(m.input.View())
 	}
+	// Ensure we're on a new line after textarea content
 	s.WriteString("\n")
 
-	// Separator
+	// Separator - add extra newline to ensure clean separation
 	sepWidth := min(m.width, 80)
 	if sepWidth < 20 {
 		sepWidth = 20
@@ -877,7 +941,12 @@ func (m model) renderHints() string {
 		}
 	}
 
-	return hintBarStyle.Render("  ? for help")
+	// Show multiline hint when input contains newlines
+	if strings.Contains(m.input.Value(), "\n") {
+		return hintBarStyle.Render("  Enter send   Ctrl+J newline   ? help")
+	}
+
+	return hintBarStyle.Render("  Enter send   Ctrl+J newline   ? help")
 }
 
 // renderCommandMenu renders a vertical list of matching commands, Claude Code style.
@@ -953,6 +1022,55 @@ func matchCommands(prefix string) []slashCmd {
 func (m *model) resetStreamState() {
 	m.processor = NewStreamProcessor()
 	m.streamPrompt = ""
+}
+
+// insertNewline adds a newline to the input and adjusts the textarea height
+func (m *model) insertNewline() {
+	currentVal := m.input.Value()
+	newVal := currentVal + "\n"
+	m.input.SetValue(newVal)
+	m.lastInputVal = newVal
+	m.updateInputHeight(newVal)
+}
+
+// updateInputHeight calculates and sets the textarea height based on content
+// It accounts for both explicit newlines and visual line wrapping
+func (m *model) updateInputHeight(content string) {
+	if content == "" {
+		m.input.SetHeight(1)
+		return
+	}
+
+	// Calculate visual lines needed
+	// The textarea width is set to m.width - 6, but the actual editable area
+	// is smaller due to the prompt. The prompt "❯ " takes ~3 characters.
+	inputWidth := m.width - 10 // Conservative estimate for actual text area
+	if inputWidth < 20 {
+		inputWidth = 20
+	}
+
+	visualLines := 0
+	for _, line := range strings.Split(content, "\n") {
+		lineLen := len([]rune(line)) // Use rune count for proper Unicode handling
+		if lineLen == 0 {
+			visualLines++
+		} else {
+			// Each line may wrap multiple times
+			// Add 1 for the line itself, plus additional lines for wrapping
+			wrappedLines := (lineLen + inputWidth - 1) / inputWidth // Ceiling division
+			visualLines += wrappedLines
+		}
+	}
+
+	// Cap at 10 lines to avoid taking over the whole terminal
+	if visualLines > 10 {
+		visualLines = 10
+	}
+	if visualLines < 1 {
+		visualLines = 1
+	}
+
+	m.input.SetHeight(visualLines)
 }
 
 // selectProject sets the selected project and saves to config

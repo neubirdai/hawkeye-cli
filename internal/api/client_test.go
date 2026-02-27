@@ -256,6 +256,32 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestNormalizeBackendURL(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"simple URL", "https://example.com", "https://example.com/api"},
+		{"trailing slash", "https://example.com/", "https://example.com/api"},
+		{"already has /api", "https://example.com/api", "https://example.com/api"},
+		{"already has /api/", "https://example.com/api/", "https://example.com/api"},
+		{"localhost", "http://localhost:3000", "http://localhost:3000/api"},
+		{"localhost trailing", "http://localhost:3000/", "http://localhost:3000/api"},
+		{"neubird URL", "https://copeye.app.neubird.ai", "https://copeye.app.neubird.ai/api"},
+		{"neubird URL slash", "https://copeye.app.neubird.ai/", "https://copeye.app.neubird.ai/api"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeBackendURL(tt.input)
+			if got != tt.want {
+				t.Errorf("NormalizeBackendURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProcessPromptStream(t *testing.T) {
 	t.Run("basic SSE parsing", func(t *testing.T) {
 		ssePayload := `event: message
