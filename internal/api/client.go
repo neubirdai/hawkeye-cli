@@ -88,49 +88,19 @@ func NewClientWithServer(server string) *Client {
 	}
 }
 
-func ResolveBackendURL(frontendURL string) (string, error) {
-	frontendURL = strings.TrimRight(frontendURL, "/")
-	envURL := frontendURL + "/env.js"
+// NormalizeBackendURL normalizes a URL to be used as the backend API endpoint.
+// It strips trailing slashes and removes any /api suffix to get the base URL,
+// then appends /api to ensure a consistent backend endpoint.
+func NormalizeBackendURL(inputURL string) string {
+	inputURL = strings.TrimRight(inputURL, "/")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(envURL)
-	if err != nil {
-		return "", fmt.Errorf("fetching %s: %w", envURL, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetching %s: status %d", envURL, resp.StatusCode)
+	// If URL already ends with /api, use it as-is
+	if strings.HasSuffix(inputURL, "/api") {
+		return inputURL
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", envURL, err)
-	}
-
-	content := string(body)
-	key := "VITE_BASE_API_URL:"
-	idx := strings.Index(content, key)
-	if idx < 0 {
-		return "", fmt.Errorf("VITE_BASE_API_URL not found in %s", envURL)
-	}
-
-	after := content[idx+len(key):]
-	quote := byte('"')
-	start := strings.IndexByte(after, quote)
-	if start < 0 {
-		quote = '\''
-		start = strings.IndexByte(after, quote)
-	}
-	if start < 0 {
-		return "", fmt.Errorf("could not parse VITE_BASE_API_URL value")
-	}
-	end := strings.IndexByte(after[start+1:], quote)
-	if end < 0 {
-		return "", fmt.Errorf("could not parse VITE_BASE_API_URL value")
-	}
-
-	return strings.TrimRight(after[start+1:start+1+end], "/"), nil
+	// Otherwise, append /api
+	return inputURL + "/api"
 }
 
 func (c *Client) Login(email, password string) (*LoginResponse, error) {

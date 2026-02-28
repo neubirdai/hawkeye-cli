@@ -137,25 +137,26 @@ func (m model) cmdHelp() (tea.Model, tea.Cmd) {
 // ─── /login ─────────────────────────────────────────────────────────────────
 
 func (m model) cmdLogin(args []string) (tea.Model, tea.Cmd) {
+	m.loginInput.Focus()
 	if len(args) > 0 {
 		m.loginURL = args[0]
 		m.mode = modeLoginUser
-		m.input.Placeholder = "Username / Email..."
-		m.input.SetValue("")
+		m.loginInput.Placeholder = "Username / Email..."
+		m.loginInput.SetValue("")
 		return m, tea.Println(dimStyle.Render(fmt.Sprintf("  Logging in to %s", m.loginURL)))
 	}
 
 	m.mode = modeLoginURL
-	m.input.Placeholder = "Server URL (e.g. https://myenv.app.neubird.ai/)..."
-	m.input.SetValue("")
+	m.loginInput.Placeholder = "Server URL (e.g. https://myenv.app.neubird.ai/)..."
+	m.loginInput.SetValue("")
 	return m, tea.Println(dimStyle.Render("  Enter the Hawkeye server URL:"))
 }
 
 func (m model) handleLoginURLSubmit(value string) (tea.Model, tea.Cmd) {
 	m.loginURL = value
 	m.mode = modeLoginUser
-	m.input.Placeholder = "Username / Email..."
-	m.input.SetValue("")
+	m.loginInput.Placeholder = "Username / Email..."
+	m.loginInput.SetValue("")
 	return m, tea.Sequence(
 		tea.Println(dimStyle.Render(fmt.Sprintf("  Server: %s", value))),
 		tea.Println(dimStyle.Render("  Enter your username/email:")),
@@ -165,10 +166,10 @@ func (m model) handleLoginURLSubmit(value string) (tea.Model, tea.Cmd) {
 func (m model) handleLoginUserSubmit(value string) (tea.Model, tea.Cmd) {
 	m.loginUser = value
 	m.mode = modeLoginPass
-	m.input.Placeholder = "Password..."
-	m.input.SetValue("")
-	m.input.EchoCharacter = '•'
-	m.input.EchoMode = textinput.EchoPassword
+	m.loginInput.Placeholder = "Password..."
+	m.loginInput.SetValue("")
+	m.loginInput.EchoCharacter = '•'
+	m.loginInput.EchoMode = textinput.EchoPassword
 	return m, tea.Sequence(
 		tea.Println(dimStyle.Render(fmt.Sprintf("  User: %s", value))),
 		tea.Println(dimStyle.Render("  Enter your password:")),
@@ -182,9 +183,9 @@ type loginResultMsg struct {
 
 func (m model) handleLoginPassSubmit(value string) (tea.Model, tea.Cmd) {
 	password := value
-	m.input.EchoMode = textinput.EchoNormal
-	m.input.SetValue("")
-	m.input.Placeholder = "Authenticating..."
+	m.loginInput.EchoMode = textinput.EchoNormal
+	m.loginInput.SetValue("")
+	m.loginInput.Placeholder = "Authenticating..."
 
 	serverURL := m.loginURL
 	username := m.loginUser
@@ -193,14 +194,8 @@ func (m model) handleLoginPassSubmit(value string) (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(
 		tea.Println(statusStyle.Render("  ⟳ Authenticating...")),
 		func() tea.Msg {
-			client := api.NewClientWithServer(serverURL)
-
-			backendURL, err := api.ResolveBackendURL(serverURL)
-			if err != nil {
-				backendURL = strings.TrimRight(serverURL, "/")
-			} else {
-				client = api.NewClientWithServer(backendURL)
-			}
+			backendURL := api.NormalizeBackendURL(serverURL)
+			client := api.NewClientWithServer(backendURL)
 
 			loginResp, err := client.Login(username, password)
 			if err != nil {

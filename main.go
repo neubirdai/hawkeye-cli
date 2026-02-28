@@ -214,19 +214,8 @@ func cmdLogin(args []string) error {
 	}
 
 	fmt.Println()
-	display.Spinner("Resolving backend from " + frontendURL + " ...")
-
-	serverURL, err := api.ResolveBackendURL(frontendURL)
-	if err != nil {
-		display.ClearLine()
-		display.Warn(fmt.Sprintf("Could not resolve backend from frontend: %v", err))
-		display.Info("Fallback:", "using URL directly as backend")
-		serverURL = strings.TrimRight(frontendURL, "/")
-	} else {
-		display.ClearLine()
-		display.Success(fmt.Sprintf("Resolved backend: %s", serverURL))
-	}
-
+	serverURL := api.NormalizeBackendURL(frontendURL)
+	display.Info("Backend:", serverURL)
 	display.Spinner("Authenticating...")
 
 	client := api.NewClientWithServer(serverURL)

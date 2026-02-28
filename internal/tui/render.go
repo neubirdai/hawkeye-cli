@@ -9,7 +9,12 @@ import (
 // ─── Welcome Screen ─────────────────────────────────────────────────────────
 
 func renderWelcome(version, server, projectName string, width int) string {
-	titleLine := logoTitleStyle.Render("Hawkeye CLI") + " " + versionStyle.Render("v"+version)
+	// Version may already have "v" prefix from git describe, don't double it
+	versionDisplay := version
+	if !strings.HasPrefix(version, "v") {
+		versionDisplay = "v" + version
+	}
+	titleLine := logoTitleStyle.Render("Hawkeye CLI") + " " + versionStyle.Render(versionDisplay)
 
 	var infoLine string
 	if server == "" {

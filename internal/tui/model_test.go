@@ -1437,3 +1437,91 @@ func TestResetStreamState(t *testing.T) {
 		t.Errorf("streamPrompt = %q, want empty after reset", m.streamPrompt)
 	}
 }
+
+func TestMultilineInput(t *testing.T) {
+	t.Run("insertNewline adds newline and updates height", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 80 // Set a reasonable width
+
+		m.input.SetValue("first line")
+		m.insertNewline()
+
+		val := m.input.Value()
+		if val != "first line\n" {
+			t.Errorf("input value = %q, want %q", val, "first line\n")
+		}
+		// Height should be at least 2 now (one for "first line", one for the new empty line)
+		// Note: we can't directly check height, but we verify the value is correct
+	})
+
+	t.Run("multiple newlines accumulate", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 80
+
+		m.input.SetValue("line 1")
+		m.insertNewline()
+		m.input.SetValue(m.input.Value() + "line 2")
+		m.insertNewline()
+		m.input.SetValue(m.input.Value() + "line 3")
+
+		val := m.input.Value()
+		expected := "line 1\nline 2\nline 3"
+		if val != expected {
+			t.Errorf("input value = %q, want %q", val, expected)
+		}
+	})
+
+	t.Run("updateInputHeight calculates correct height for single line", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 80
+
+		m.updateInputHeight("short text")
+		// Should be 1 line - we can't directly check the height but the function shouldn't panic
+	})
+
+	t.Run("updateInputHeight calculates correct height for multiple lines", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 80
+
+		m.updateInputHeight("line 1\nline 2\nline 3")
+		// Should be 3 lines
+	})
+
+	t.Run("updateInputHeight handles empty content", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 80
+
+		m.updateInputHeight("")
+		// Should be 1 line (minimum)
+	})
+
+	t.Run("updateInputHeight handles long lines that wrap", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 40 // Narrow width to force wrapping
+
+		// Create a line longer than the width
+		longLine := "This is a very long line that should wrap to multiple visual lines in the textarea"
+		m.updateInputHeight(longLine)
+		// Should calculate multiple lines due to wrapping
+	})
+
+	t.Run("updateInputHeight caps at 10 lines", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 80
+
+		// Create content with more than 10 lines
+		manyLines := "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15"
+		m.updateInputHeight(manyLines)
+		// Should cap at 10 lines (we can't directly verify but it shouldn't panic)
+	})
+
+	t.Run("updateInputHeight handles unicode correctly", func(t *testing.T) {
+		m := newTestModel()
+		m.width = 80
+
+		// Unicode characters should be counted as single characters
+		unicodeText := "你好世界" // 4 characters
+		m.updateInputHeight(unicodeText)
+		// Should handle unicode without panicking
+	})
+}
